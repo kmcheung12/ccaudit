@@ -38,7 +38,9 @@ Each line is a JSON object. Relevant message types:
 |---|---|
 | `assistant` | `message.usage` — `input_tokens`, `output_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens` |
 | `user` | `message.content` — full context text for category scanning |
-| `system/compact_boundary` | `compactMetadata.preTokens` — marks context resets |
+| `system/compact_boundary` | Marks context resets; session display flags turns after a compact boundary with a visual separator. `compactMetadata.preTokens` is shown as an annotation but not used in token arithmetic. |
+
+**Session naming:** sessions are identified by the `.jsonl` filename (UUID). Display names are truncated to 8 characters of the UUID (e.g., `4b177c76`) with the session timestamp as a tooltip. Sessions with zero assistant messages are shown with all token counts as zero rather than hidden.
 
 ### Token Types
 
@@ -76,16 +78,20 @@ category_tokens = (category_char_count / total_char_count) × actual_input_token
 
 This ensures all categories sum exactly to the recorded `input_tokens` for the turn.
 
-| Category | Detection marker |
-|---|---|
-| **Skills** | Block starting with `Base directory: /...skills/...` followed by markdown `# Heading` |
-| **Memory** | Block matching `---\nname: ...\ntype: ...\n---` YAML frontmatter |
-| **System/Tools** | `<system-reminder>` tags and tool result blocks |
-| **Agents** | Tool use blocks where tool name is `Agent` or contains subagent output |
-| **System Prompt** | Estimated from first turn's `cache_read_input_tokens` baseline (~9,550 tokens consistently) |
-| **Messages** | Everything else — prior conversation history |
+Category attribution applies only to `input_tokens` (fresh tokens). `cache_read_input_tokens`, `cache_creation_input_tokens`, and `output_tokens` are shown as aggregate-only line items in the Token Totals section and are not split by category.
 
-Items within each category extract their name from the marker (e.g., skill title from the `# Heading`, memory name from the `name:` field).
+| Category | Detection marker | Item name extraction |
+|---|---|---|
+| **Skills** | Text block starting with the literal line `Base directory: /` where the path contains `/skills/`, followed by a markdown `# Heading` on a subsequent line. This matches Claude Code's current skill injection format (as of 2026-03). | The `# Heading` text |
+| **Memory** | Text block containing YAML frontmatter matching `---\nname: <value>\ntype: <value>\n---` | The `name:` field value |
+| **System/Tools** | `<system-reminder>...</system-reminder>` tags and `<function_results>...</function_results>` blocks | Tag name / tool name |
+| **Agents** | Tool use result blocks where the originating tool call has `"name": "Agent"` | `Agent` (subagent type if parseable) |
+| **System Prompt** | The first `cache_read_input_tokens` value observed in a session (typically ~9,550 tokens) is treated as the static system prompt baseline. This is attributed as a fixed token count rather than via text scanning. If the first turn has `cache_read = 0` (no prior cache hit), system prompt tokens are set to 0 and flagged as unknown. If the baseline shifts across sessions, each session uses its own first-turn value. | `System Prompt` |
+| **Messages** | All remaining content not matched by the above | — |
+
+Items within each category extract their name from the marker. If a block matches multiple patterns, the first matching rule wins (order as listed above).
+
+**Resilience:** malformed or unparseable JSONL lines are silently skipped. Assistant messages missing a `usage` field are skipped. Projects or sessions that fail to load show an error annotation in the tree but do not crash the app.
 
 ---
 
@@ -117,16 +123,18 @@ Built with [Textual](https://github.com/Textualize/textual). Split-pane layout:
 
 - **Left pane**: collapsible tree. Selecting any node updates the right pane.
 - **Right pane**: aggregated category breakdown table + token totals for the selected node.
-- **`/` filter**: fuzzy-filter tree nodes by name.
+- **`/` filter**: fuzzy-filter tree nodes by name. Filters all levels simultaneously (project, session, turn labels). Case-insensitive substring match. Pressing `Escape` or backspacing to empty clears the filter and restores the full tree.
 - **Mouse support**: click to select and expand nodes.
 
 ---
 
 ## Module Structure
 
+Requires Python ≥ 3.11 (for `tomllib` and `match` statement support). Textual requires Python ≥ 3.8; we use 3.11+ features so 3.11 is the effective minimum.
+
 ```
 ccaudit/
-├── ccaudit.py              # entry point
+├── main.py                 # entry point (avoids import collision with parser/ package)
 ├── parser/
 │   ├── __init__.py
 │   ├── loader.py           # scans ~/.claude/projects/, loads .jsonl files
