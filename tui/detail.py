@@ -266,11 +266,17 @@ class DetailPane(Widget):
 
         if turn.tool_calls:
             content.append("\n\nTool calls\n", style="bold bright_white")
-            for name, param in turn.tool_calls:
-                content.append(f"  {name}", style="bright_yellow")
-                if param:
-                    content.append(f"  {param}", style="dim")
-                content.append("\n")
+            for name, inp in turn.tool_calls:
+                content.append(f"  {name}\n", style="bright_yellow")
+                for key, val in inp.items():
+                    val_str = str(val) if not isinstance(val, str) else val
+                    # Truncate large blobs (prompts, file contents, commands)
+                    if len(val_str) > 400:
+                        val_str = val_str[:400] + "…"
+                    # Indent multi-line values
+                    val_str = val_str.replace("\n", "\n        ")
+                    content.append(f"    {key}: ", style="dim")
+                    content.append(f"{val_str}\n", style="white")
 
         if turn.files_read:
             content.append("\nFiles read\n", style="bold bright_white")

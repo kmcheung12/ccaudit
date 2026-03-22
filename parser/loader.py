@@ -81,53 +81,39 @@ def _extract_human_text(content) -> str:
     return ""
 
 
-def _extract_tool_calls(content) -> tuple[list[str], list[tuple[str, str]]]:
+def _extract_tool_calls(content) -> tuple[list[str], list[tuple[str, dict]]]:
     """
     Extract tool usage from tool_use blocks in an assistant message.
 
     Returns:
         files_read: paths from Read/Glob/Grep calls
-        tool_calls: list of (tool_name, key_param) for all tool_use blocks
+        tool_calls: list of (tool_name, input_dict) for all tool_use blocks
     """
     if not isinstance(content, list):
         return [], []
     files: list[str] = []
-    calls: list[tuple[str, str]] = []
+    calls: list[tuple[str, dict]] = []
     for block in content:
         if not isinstance(block, dict) or block.get("type") != "tool_use":
             continue
         tool = block.get("name", "")
         inp = block.get("input", {}) if isinstance(block.get("input"), dict) else {}
-        # Derive a short key parameter for display
+        # Track file reads separately for the files_read field
         if tool == "Read":
-            param = inp.get("file_path", "")
-            if param:
-                files.append(param)
+            path = inp.get("file_path", "")
+            if path:
+                files.append(path)
         elif tool == "Glob":
-            param = inp.get("pattern", inp.get("path", ""))
-            if param:
-                files.append(f"Glob:{param}")
+            path = inp.get("pattern", inp.get("path", ""))
+            if path:
+                files.append(f"Glob:{path}")
         elif tool == "Grep":
-            param = inp.get("pattern", "")
+            pattern = inp.get("pattern", "")
             path = inp.get("path", "")
-            param = f"{param!r} in {path}" if path else repr(param)
-            if param:
-                files.append(f"Grep:{param}")
-        elif tool == "Bash":
-            param = inp.get("command", "")[:80]
-        elif tool in ("Edit", "Write"):
-            param = inp.get("file_path", "")
-        elif tool == "WebFetch":
-            param = inp.get("url", "")[:80]
-        elif tool == "Agent":
-            param = inp.get("description", "subagent")[:60]
-        else:
-            param = next(iter(inp.values()), "") if inp else ""
-            if isinstance(param, str):
-                param = param[:60]
-            else:
-                param = ""
-        calls.append((tool, param))
+            label = f"{pattern!r} in {path}" if path else repr(pattern)
+            if label:
+                files.append(f"Grep:{label}")
+        calls.append((tool, inp))
     return files, calls
 
 
