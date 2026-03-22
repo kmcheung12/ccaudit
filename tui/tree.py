@@ -4,7 +4,7 @@ from textual.widgets import Tree
 from textual.widgets.tree import TreeNode
 from textual.widget import Widget
 from textual.message import Message
-from parser.models import GlobalStats, ProjectStats, SessionStats, TurnStats, CategoryBreakdown, CategoryItem
+from parser.models import GlobalStats, ProjectStats
 from parser.loader import load_project
 
 
@@ -32,27 +32,22 @@ class StatsTree(Widget):
     def compose(self):
         tree: Tree = Tree("[ALL PROJECTS]", id="stats-tree")
         tree.root.data = self._global
-        # Add project nodes (unloaded)
-        for project in self._global.projects:
-            node = tree.root.add(
+        self._add_project_nodes(tree.root, self._global.projects)
+        yield tree
+
+    def _add_project_nodes(self, root: TreeNode, projects: list[ProjectStats]) -> None:
+        """Add project nodes with placeholder children to root."""
+        for project in projects:
+            node = root.add(
                 f"📁 {project.display_name}",
                 data=project,
                 expand=False,
             )
-            # Add a placeholder child so the expand arrow appears
             node.add_leaf("Loading...", data=None)
-        yield tree
 
-    def on_tree_node_expanded(self, event: Tree.NodeExpanded) -> None:
-        node = event.node
-        project = node.data
-        if not isinstance(project, ProjectStats):
-            return
-        if project.loaded:
-            return
-        # Lazy load
+    def _populate_project_node(self, node: TreeNode, project: ProjectStats) -> None:
+        """Populate a project node with its sessions (called lazily on first expand)."""
         load_project(project)
-        # Remove placeholder
         node.remove_children()
         if project.load_error:
             node.add_leaf(f"⚠ {project.load_error}", data=None)
@@ -69,30 +64,39 @@ class StatsTree(Widget):
                 t_node = s_node.add(
                     f"{prefix} turn {turn.turn_number}", data=turn, expand=False
                 )
-                # Category children
                 for cat_name, tokens in turn.category_breakdown.category_totals().items():
                     if tokens == 0:
                         continue
                     t_node.add_leaf(f"  {cat_name}: {tokens:,}", data=(turn, cat_name))
+
+    def on_tree_node_expanded(self, event: Tree.NodeExpanded) -> None:
+        node = event.node
+        project = node.data
+        if not isinstance(project, ProjectStats):
+            return
+        if project.loaded:
+            return
+        self._populate_project_node(node, project)
 
     def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
         if event.node.data is not None:
             self.post_message(NodeSelected(event.node.data))
 
     def filter(self, query: str) -> None:
-        """Show/hide nodes by case-insensitive substring match on label."""
+        """Filter project nodes by case-insensitive substring match on display name.
+
+        Removes non-matching project nodes from the tree and re-adds matching ones.
+        Clears query (empty string) restores all projects.
+        """
         tree = self.query_one("#stats-tree", Tree)
         query = query.lower().strip()
-        self._apply_filter(tree.root, query)
 
-    def _apply_filter(self, node: TreeNode, query: str) -> bool:
-        """Recursively show/hide. Returns True if node or any descendant matches."""
-        label = str(node.label).lower()
-        matches = not query or query in label
-        child_matches = False
-        for child in node.children:
-            if self._apply_filter(child, query):
-                child_matches = True
-        visible = matches or child_matches
-        node.allow_expand = visible
-        return visible
+        # Remove all current project children from root
+        tree.root.remove_children()
+
+        # Re-add only matching projects (or all if no query)
+        matching = [
+            p for p in self._global.projects
+            if not query or query in p.display_name.lower()
+        ]
+        self._add_project_nodes(tree.root, matching)
