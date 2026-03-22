@@ -1,6 +1,6 @@
 from __future__ import annotations
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from parser.models import (
     CategoryBreakdown, CategoryItem, TurnStats, SessionStats, ProjectStats, GlobalStats, CATEGORIES,
 )
@@ -17,6 +17,16 @@ class TokenTotals:
     cache_read: int
     cache_create: int
     output: int
+
+
+@dataclass
+class BarRow:
+    label: str
+    data: object          # node data posted as NodeSelected on Enter
+    category_totals: dict[str, int]
+    fresh_tokens: int     # input + cache_create
+    cache_tokens: int     # cache_read
+    output_tokens: int = 0
 
 
 # Category display colours (Rich style strings)
@@ -91,8 +101,8 @@ def build_category_rows(turn: TurnStats, cat_name: str) -> list[tuple[str, int]]
     return rows
 
 
-def build_turn_chart_legend() -> Text:
-    """Build the colour legend for the turn chart."""
+def build_chart_legend() -> Text:
+    """Build the colour legend shared by all bar charts."""
     result = Text()
     for cat, style in _CAT_STYLE.items():
         result.append("█", style=style)
@@ -102,35 +112,89 @@ def build_turn_chart_legend() -> Text:
     return result
 
 
-def build_turn_chart_bars(session: SessionStats, bar_width: int = 28, cursor: int = -1) -> Text:
-    """
-    Build per-turn stacked bar rows for a session (no legend).
+# --- Bar row builders ---
 
-    Each row = one turn. Fresh input is shown as coloured category segments.
-    Cache-read tokens follow as dim '░' characters. ⚡ marks post-compact turns.
-    The row at index `cursor` is highlighted.
-    """
-    if not session.turns:
-        return Text("(no turns)", style="dim")
+def _session_bar_rows(node: GlobalStats) -> list[BarRow]:
+    """One bar per loaded project."""
+    rows = []
+    for project in node.projects:
+        if not project.loaded or not project.sessions:
+            continue
+        rows.append(BarRow(
+            label=project.display_name[:14],
+            data=project,
+            category_totals=project.category_totals(),
+            fresh_tokens=project.total_input_tokens + project.total_cache_create_tokens,
+            cache_tokens=project.total_cache_read_tokens,
+            output_tokens=project.total_output_tokens,
+        ))
+    return rows
 
-    max_total = max(
-        t.input_tokens + t.cache_create_tokens + t.cache_read_tokens
-        for t in session.turns
-    ) or 1
+
+def _session_bar_rows_for_project(node: ProjectStats) -> list[BarRow]:
+    """One bar per session."""
+    rows = []
+    for session in node.sessions:
+        rows.append(BarRow(
+            label=session.display_name,
+            data=session,
+            category_totals=session.category_totals(),
+            fresh_tokens=session.total_input_tokens + session.total_cache_create_tokens,
+            cache_tokens=session.total_cache_read_tokens,
+            output_tokens=session.total_output_tokens,
+        ))
+    return rows
+
+
+def _turn_bar_rows(node: SessionStats) -> list[BarRow]:
+    """One bar per turn."""
+    rows = []
+    for turn in node.turns:
+        prefix = "⚡" if turn.after_compact else " "
+        rows.append(BarRow(
+            label=f"{prefix}T{turn.turn_number:2d}",
+            data=turn,
+            category_totals=turn.category_breakdown.category_totals(),
+            fresh_tokens=turn.input_tokens + turn.cache_create_tokens,
+            cache_tokens=turn.cache_read_tokens,
+            output_tokens=turn.output_tokens,
+        ))
+    return rows
+
+
+def bar_rows_for(node) -> list[BarRow]:
+    if isinstance(node, GlobalStats):
+        return _session_bar_rows(node)
+    if isinstance(node, ProjectStats):
+        return _session_bar_rows_for_project(node)
+    if isinstance(node, SessionStats):
+        return _turn_bar_rows(node)
+    return []
+
+
+def build_chart_bars(rows: list[BarRow], bar_width: int = 28, cursor: int = -1) -> Text:
+    """
+    Render a list of BarRows as a stacked bar chart.
+    Fresh tokens → coloured category segments (█).
+    Cache read   → dim░ segments.
+    The row at `cursor` is highlighted.
+    """
+    if not rows:
+        return Text("(no data)", style="dim")
+
+    max_total = max(r.fresh_tokens + r.cache_tokens for r in rows) or 1
 
     result = Text()
-    for i, turn in enumerate(session.turns):
+    for i, row in enumerate(rows):
         if i > 0:
             result.append("\n")
         row_start = len(result)
 
-        fresh = turn.input_tokens + turn.cache_create_tokens
-        total = fresh + turn.cache_read_tokens
-        fresh_chars = max(1, round((fresh / max_total) * bar_width))
-        cache_chars = round((turn.cache_read_tokens / max_total) * bar_width)
+        total = row.fresh_tokens + row.cache_tokens
+        fresh_chars = max(1, round((row.fresh_tokens / max_total) * bar_width))
+        cache_chars = round((row.cache_tokens / max_total) * bar_width)
 
-        # Category-coloured segments for fresh input
-        cat_totals = turn.category_breakdown.category_totals()
+        cat_totals = row.category_totals
         total_cat = sum(cat_totals.values()) or 1
         bar = Text()
         used = 0
@@ -145,15 +209,14 @@ def build_turn_chart_bars(session: SessionStats, bar_width: int = 28, cursor: in
                 used += chars
         if used < fresh_chars:
             bar.append("█" * (fresh_chars - used), style="dim")
-
-        # Cache-read shown as dim░
         if cache_chars > 0:
             bar.append("░" * cache_chars, style="dim")
 
-        prefix = "⚡" if turn.after_compact else " "
-        result.append(f"{prefix}T{turn.turn_number:2d} {total:6,}  ")
+        label = row.label[:14].ljust(14)
+        result.append(f"{label} {total:8,}  ")
         result.append_text(bar)
-        result.append(f"  →{turn.output_tokens:,}")
+        if row.output_tokens:
+            result.append(f"  →{row.output_tokens:,}")
 
         if i == cursor:
             result.stylize("bold on dark_blue", row_start, len(result))
@@ -161,58 +224,55 @@ def build_turn_chart_bars(session: SessionStats, bar_width: int = 28, cursor: in
     return result
 
 
-class TurnChart(Widget):
-    """Focusable stacked bar chart. Up/Down moves cursor; Enter opens the turn."""
+class BarChart(Widget):
+    """Focusable stacked bar chart. Up/Down moves cursor; Enter selects the row."""
 
     can_focus = True
 
     DEFAULT_CSS = """
-    TurnChart {
+    BarChart {
         height: auto;
     }
-    TurnChart:focus {
+    BarChart:focus {
         border-left: tall $accent;
     }
     """
 
     BINDINGS = [
-        Binding("up",    "cursor_up",    show=False),
-        Binding("down",  "cursor_down",  show=False),
-        Binding("enter", "select_turn",  "Open turn", show=False),
+        Binding("up",    "cursor_up",   show=False),
+        Binding("down",  "cursor_down", show=False),
+        Binding("enter", "select_row",  "Open", show=False),
     ]
 
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
-        self._session: SessionStats | None = None
+        self._rows: list[BarRow] = []
         self._cursor: int = 0
 
-    def set_session(self, session: SessionStats) -> None:
-        self._session = session
+    def set_rows(self, rows: list[BarRow]) -> None:
+        self._rows = rows
         self._cursor = 0
         self.refresh()
 
     def render(self) -> Text:
-        if self._session is None:
-            return Text("")
-        return build_turn_chart_bars(self._session, cursor=self._cursor)
+        return build_chart_bars(self._rows, cursor=self._cursor)
 
     def action_cursor_up(self) -> None:
-        if self._session and self._cursor > 0:
+        if self._cursor > 0:
             self._cursor -= 1
             self.refresh()
             self._scroll_into_view()
 
     def action_cursor_down(self) -> None:
-        if self._session and self._cursor < len(self._session.turns) - 1:
+        if self._cursor < len(self._rows) - 1:
             self._cursor += 1
             self.refresh()
             self._scroll_into_view()
 
-    def action_select_turn(self) -> None:
-        # Import here to avoid circular import at module level
+    def action_select_row(self) -> None:
         from tui.tree import NodeSelected
-        if self._session and self._session.turns:
-            self.post_message(NodeSelected(self._session.turns[self._cursor]))
+        if self._rows:
+            self.post_message(NodeSelected(self._rows[self._cursor].data))
 
     def _scroll_into_view(self) -> None:
         parent = self.parent
@@ -260,7 +320,7 @@ class DetailPane(Widget):
         with Vertical(id="chart-section"):
             yield Static("", id="chart-legend")
             with VerticalScroll(id="chart-scroll"):
-                yield TurnChart(id="chart-bars")
+                yield BarChart(id="chart-bars")
         with VerticalScroll(id="message-section"):
             yield Static("", id="message-body")
 
@@ -297,12 +357,11 @@ class DetailPane(Widget):
 
         self._refresh_totals(totals)
 
-        # Session: show per-turn activity chart below the tables
-        if isinstance(node, SessionStats):
-            chart_section = self.query_one("#chart-section", Vertical)
-            chart_section.display = True
-            self.query_one("#chart-legend", Static).update(build_turn_chart_legend())
-            self.query_one("#chart-bars", TurnChart).set_session(node)
+        bar_rows = bar_rows_for(node)
+        if bar_rows:
+            self.query_one("#chart-section", Vertical).display = True
+            self.query_one("#chart-legend", Static).update(build_chart_legend())
+            self.query_one("#chart-bars", BarChart).set_rows(bar_rows)
 
     def update_turn(self, turn: TurnStats) -> None:
         """Refresh for a TurnStats node — shows category breakdown and message preview."""

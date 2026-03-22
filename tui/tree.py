@@ -120,10 +120,10 @@ class StatsTree(Widget):
                 return found
         return None
 
-    def select_turn(self, turn: TurnStats) -> None:
-        """Move the tree cursor to the node representing `turn`, expanding ancestors."""
+    def select_node(self, target_data) -> None:
+        """Move the tree cursor to the node whose data is `target_data`, expanding ancestors."""
         tree = self.query_one("#stats-tree", _NavTree)
-        node = self._find_node_by_data(tree.root, turn)
+        node = self._find_node_by_data(tree.root, target_data)
         if node is None:
             return
         ancestor = node.parent
