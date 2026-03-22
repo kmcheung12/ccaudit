@@ -59,6 +59,7 @@ class TurnStats:
     after_compact: bool = False
     user_text: str = ""       # human-typed portion of the user message
     assistant_text: str = ""  # assistant's text response
+    files_read: list[str] = field(default_factory=list)  # file paths accessed via tools
 
 
 @dataclass

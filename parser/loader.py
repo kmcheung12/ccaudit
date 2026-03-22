@@ -81,6 +81,27 @@ def _extract_human_text(content) -> str:
     return ""
 
 
+def _extract_files_read(content) -> list[str]:
+    """Extract file paths from tool_use blocks in an assistant message."""
+    if not isinstance(content, list):
+        return []
+    files = []
+    for block in content:
+        if not isinstance(block, dict) or block.get("type") != "tool_use":
+            continue
+        tool = block.get("name", "")
+        inp = block.get("input", {})
+        if tool == "Read":
+            path = inp.get("file_path", "")
+            if path:
+                files.append(path)
+        elif tool in ("Glob", "Grep"):
+            path = inp.get("path") or inp.get("pattern") or ""
+            if path:
+                files.append(f"{tool}:{path}")
+    return files
+
+
 def _extract_assistant_text(content) -> str:
     """Extract plain text from an assistant message content."""
     if isinstance(content, str):
@@ -168,6 +189,7 @@ def load_session(jsonl_file: Path) -> SessionStats:
 
             assistant_content = msg.get("message", {}).get("content", "")
             assistant_text = _extract_assistant_text(assistant_content)
+            files_read = _extract_files_read(assistant_content)
 
             turn_number += 1
             turns.append(TurnStats(
@@ -181,6 +203,7 @@ def load_session(jsonl_file: Path) -> SessionStats:
                 after_compact=after_compact,
                 user_text=pending_human_text,
                 assistant_text=assistant_text,
+                files_read=files_read,
             ))
             pending_user_text = None
             pending_human_text = ""

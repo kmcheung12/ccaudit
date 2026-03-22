@@ -95,6 +95,8 @@ def build_turn_chart_legend() -> Text:
     for cat, style in _CAT_STYLE.items():
         result.append("█", style=style)
         result.append(f" {cat}  ", style="dim")
+    result.append("░", style="dim")
+    result.append(" Cache read", style="dim")
     return result
 
 
@@ -102,23 +104,28 @@ def build_turn_chart_bars(session: SessionStats, bar_width: int = 28) -> Text:
     """
     Build per-turn stacked bar rows for a session (no legend).
 
-    Each row = one turn. Bar width proportional to cache_create + input (new context
-    added this turn). Segments coloured by category. ⚡ marks post-compact turns.
+    Each row = one turn. Fresh input is shown as coloured category segments.
+    Cache-read tokens follow as dim '░' characters. ⚡ marks post-compact turns.
     """
     if not session.turns:
         return Text("(no turns)", style="dim")
 
-    max_ctx = max(t.cache_create_tokens + t.input_tokens for t in session.turns) or 1
+    max_total = max(
+        t.input_tokens + t.cache_create_tokens + t.cache_read_tokens
+        for t in session.turns
+    ) or 1
 
     result = Text()
     for i, turn in enumerate(session.turns):
         if i > 0:
             result.append("\n")
 
-        ctx = turn.cache_create_tokens + turn.input_tokens
-        filled = max(1, round((ctx / max_ctx) * bar_width))
+        fresh = turn.input_tokens + turn.cache_create_tokens
+        total = fresh + turn.cache_read_tokens
+        fresh_chars = max(1, round((fresh / max_total) * bar_width))
+        cache_chars = round((turn.cache_read_tokens / max_total) * bar_width)
 
-        # Build coloured bar segments from category breakdown
+        # Category-coloured segments for fresh input
         cat_totals = turn.category_breakdown.category_totals()
         total_cat = sum(cat_totals.values()) or 1
         bar = Text()
@@ -127,16 +134,20 @@ def build_turn_chart_bars(session: SessionStats, bar_width: int = 28) -> Text:
             tokens = cat_totals.get(cat, 0)
             if tokens == 0:
                 continue
-            chars = round((tokens / total_cat) * filled)
-            chars = min(chars, filled - used)
+            chars = round((tokens / total_cat) * fresh_chars)
+            chars = min(chars, fresh_chars - used)
             if chars > 0:
                 bar.append("█" * chars, style=_CAT_STYLE.get(cat, "white"))
                 used += chars
-        if used < filled:
-            bar.append("█" * (filled - used), style="dim")
+        if used < fresh_chars:
+            bar.append("█" * (fresh_chars - used), style="dim")
+
+        # Cache-read shown as dim░
+        if cache_chars > 0:
+            bar.append("░" * cache_chars, style="dim")
 
         prefix = "⚡" if turn.after_compact else " "
-        result.append(f"{prefix}T{turn.turn_number:2d} {ctx:6,}  ")
+        result.append(f"{prefix}T{turn.turn_number:2d} {total:6,}  ")
         result.append_text(bar)
         result.append(f"  →{turn.output_tokens:,}")
 
@@ -197,8 +208,10 @@ class DetailPane(Widget):
     def _refresh_totals(self, totals: TokenTotals) -> None:
         totals_table = self.query_one("#totals-table", DataTable)
         totals_table.clear()
+        total_in = totals.input_tokens + totals.cache_read + totals.cache_create
+        cache_pct = (totals.cache_read / total_in * 100) if total_in > 0 else 0.0
         totals_table.add_row("Input (fresh)", f"{totals.input_tokens:,}")
-        totals_table.add_row("Cache read",    f"{totals.cache_read:,}")
+        totals_table.add_row("Cache read",    f"{totals.cache_read:,}  ({cache_pct:.0f}% hit)")
         totals_table.add_row("Cache write",   f"{totals.cache_create:,}")
         totals_table.add_row("Output",        f"{totals.output:,}")
 
@@ -244,6 +257,10 @@ class DetailPane(Widget):
         content.append(user_preview, style="dim")
         content.append("\n\nAssistant\n", style="bold bright_white")
         content.append(asst_preview, style="dim")
+        if turn.files_read:
+            content.append("\n\nFiles accessed\n", style="bold bright_white")
+            for path in turn.files_read:
+                content.append(f"  {path}\n", style="bright_blue")
         msg_widget.update(content)
 
     def update_category(self, turn: TurnStats, cat_name: str) -> None:
