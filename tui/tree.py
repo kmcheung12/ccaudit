@@ -45,10 +45,8 @@ class StatsTree(Widget):
             )
             node.add_leaf("Loading...", data=None)
 
-    def _populate_project_node(self, node: TreeNode, project: ProjectStats) -> None:
-        """Populate a project node with its sessions (called lazily on first expand)."""
-        load_project(project)
-        node.remove_children()
+    def _populate_project_node_from_data(self, node: TreeNode, project: ProjectStats) -> None:
+        """Render sessions for an already-loaded project (no disk I/O)."""
         if project.load_error:
             node.add_leaf(f"⚠ {project.load_error}", data=None)
             return
@@ -69,13 +67,23 @@ class StatsTree(Widget):
                         continue
                     t_node.add_leaf(f"  {cat_name}: {tokens:,}", data=(turn, cat_name))
 
+    def _populate_project_node(self, node: TreeNode, project: ProjectStats) -> None:
+        """Load project from disk and populate node."""
+        load_project(project)
+        node.remove_children()
+        self._populate_project_node_from_data(node, project)
+
     def on_tree_node_expanded(self, event: Tree.NodeExpanded) -> None:
         node = event.node
         project = node.data
         if not isinstance(project, ProjectStats):
             return
         if project.loaded:
+            # Already loaded — just re-populate from existing data
+            node.remove_children()
+            self._populate_project_node_from_data(node, project)
             return
+        # First time — load from disk
         self._populate_project_node(node, project)
 
     def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:

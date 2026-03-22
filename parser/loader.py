@@ -17,6 +17,8 @@ def slug_to_display(slug: str) -> str:
 
 def list_projects(projects_dir: Path = PROJECTS_DIR) -> list[ProjectStats]:
     """Return unloaded ProjectStats for each subdirectory."""
+    if not projects_dir.exists():
+        return []
     projects = []
     for d in sorted(projects_dir.iterdir()):
         if d.is_dir():
