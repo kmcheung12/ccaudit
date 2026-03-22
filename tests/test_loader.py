@@ -1,0 +1,131 @@
+import json
+import pytest
+from pathlib import Path
+from parser.loader import slug_to_display, load_session, list_projects
+from parser.models import ProjectStats
+
+
+def write_jsonl(path: Path, lines: list[dict]) -> None:
+    path.write_text("\n".join(json.dumps(l) for l in lines))
+
+
+# slug_to_display
+
+def test_slug_to_display_simple():
+    assert slug_to_display("-Users-alan-code-feedr") == "feedr"
+
+
+def test_slug_to_display_hyphenated_project():
+    assert slug_to_display("-Users-alan-code-my-project") == "my-project"
+
+
+def test_slug_to_display_short():
+    assert slug_to_display("proj") == "proj"
+
+
+# load_session basic
+
+def test_load_session_empty_file(tmp_path):
+    f = tmp_path / "abc123.jsonl"
+    f.write_text("")
+    session = load_session(f)
+    assert session.session_id == "abc123"
+    assert session.turns == []
+
+
+def test_load_session_skips_malformed_lines(tmp_path):
+    f = tmp_path / "abc123.jsonl"
+    f.write_text("not json\n{also bad\n")
+    session = load_session(f)
+    assert session.turns == []
+
+
+def test_load_session_extracts_turns(tmp_path):
+    f = tmp_path / "sess1.jsonl"
+    write_jsonl(f, [
+        {
+            "type": "user",
+            "message": {"role": "user", "content": "Hello world, this is a test message"},
+            "timestamp": "2026-01-01T00:00:00Z",
+        },
+        {
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "usage": {
+                    "input_tokens": 5,
+                    "cache_read_input_tokens": 9550,
+                    "cache_creation_input_tokens": 100,
+                    "output_tokens": 20,
+                },
+            },
+            "timestamp": "2026-01-01T00:00:01Z",
+        },
+    ])
+    session = load_session(f)
+    assert len(session.turns) == 1
+    turn = session.turns[0]
+    assert turn.input_tokens == 5
+    assert turn.cache_read_tokens == 9550
+    assert turn.cache_create_tokens == 100
+    assert turn.output_tokens == 20
+    assert turn.turn_number == 1
+
+
+def test_load_session_display_name(tmp_path):
+    f = tmp_path / "4b177c76-c056-4ed7-b62f-1d41710cf376.jsonl"
+    f.write_text("")
+    session = load_session(f)
+    assert session.display_name == "4b177c76"
+
+
+def test_load_session_multiple_turns(tmp_path):
+    f = tmp_path / "multi.jsonl"
+    write_jsonl(f, [
+        {"type": "user", "message": {"content": "msg1"}, "timestamp": "2026-01-01T00:00:00Z"},
+        {"type": "assistant", "message": {"usage": {"input_tokens": 10, "cache_read_input_tokens": 100, "cache_creation_input_tokens": 50, "output_tokens": 5}}, "timestamp": "2026-01-01T00:00:01Z"},
+        {"type": "user", "message": {"content": "msg2"}, "timestamp": "2026-01-01T00:00:02Z"},
+        {"type": "assistant", "message": {"usage": {"input_tokens": 8, "cache_read_input_tokens": 200, "cache_creation_input_tokens": 30, "output_tokens": 12}}, "timestamp": "2026-01-01T00:00:03Z"},
+    ])
+    session = load_session(f)
+    assert len(session.turns) == 2
+    assert session.turns[0].turn_number == 1
+    assert session.turns[1].turn_number == 2
+
+
+def test_load_session_marks_after_compact(tmp_path):
+    f = tmp_path / "compact.jsonl"
+    write_jsonl(f, [
+        {"type": "user", "message": {"content": "before"}, "timestamp": "2026-01-01T00:00:00Z"},
+        {"type": "assistant", "message": {"usage": {"input_tokens": 5, "cache_read_input_tokens": 100, "cache_creation_input_tokens": 50, "output_tokens": 5}}, "timestamp": "2026-01-01T00:00:01Z"},
+        {"type": "system", "subtype": "compact_boundary", "content": "Conversation compacted", "compactMetadata": {"trigger": "auto", "preTokens": 5000}, "timestamp": "2026-01-01T00:00:02Z"},
+        {"type": "user", "message": {"content": "after compact"}, "timestamp": "2026-01-01T00:00:03Z"},
+        {"type": "assistant", "message": {"usage": {"input_tokens": 3, "cache_read_input_tokens": 200, "cache_creation_input_tokens": 20, "output_tokens": 10}}, "timestamp": "2026-01-01T00:00:04Z"},
+    ])
+    session = load_session(f)
+    assert len(session.turns) == 2
+    assert not session.turns[0].after_compact
+    assert session.turns[1].after_compact
+
+
+def test_load_session_skips_assistant_without_usage(tmp_path):
+    f = tmp_path / "nousage.jsonl"
+    write_jsonl(f, [
+        {"type": "user", "message": {"content": "hi"}, "timestamp": "2026-01-01T00:00:00Z"},
+        {"type": "assistant", "message": {"role": "assistant"}, "timestamp": "2026-01-01T00:00:01Z"},
+    ])
+    session = load_session(f)
+    assert session.turns == []
+
+
+# list_projects
+
+def test_list_projects(tmp_path):
+    (tmp_path / "-Users-alice-code-alpha").mkdir()
+    (tmp_path / "-Users-alice-code-beta").mkdir()
+    projects = list_projects(tmp_path)
+    names = [p.display_name for p in projects]
+    assert "alpha" in names
+    assert "beta" in names
+    for p in projects:
+        assert not p.loaded
