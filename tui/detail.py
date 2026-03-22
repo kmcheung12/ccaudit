@@ -1,4 +1,5 @@
 from __future__ import annotations
+import json
 from dataclasses import dataclass
 from parser.models import (
     CategoryBreakdown, CategoryItem, TurnStats, SessionStats, ProjectStats, GlobalStats, CATEGORIES,
@@ -180,7 +181,10 @@ class DetailPane(Widget):
     #message-section {
         display: none;
         border-top: solid $panel;
-        padding: 1 1;
+        height: 1fr;
+        padding: 0 1 1 1;
+    }
+    #message-body {
         height: auto;
     }
     """
@@ -192,7 +196,8 @@ class DetailPane(Widget):
             yield Static("", id="chart-legend")
             with VerticalScroll(id="chart-scroll"):
                 yield Static("", id="chart-bars")
-        yield Static("", id="message-section")
+        with VerticalScroll(id="message-section"):
+            yield Static("", id="message-body")
 
     def on_mount(self) -> None:
         cat_table = self.query_one("#category-table", DataTable)
@@ -203,7 +208,7 @@ class DetailPane(Widget):
 
     def _hide_extras(self) -> None:
         self.query_one("#chart-section", Vertical).display = False
-        self.query_one("#message-section").display = False
+        self.query_one("#message-section", VerticalScroll).display = False
 
     def _refresh_totals(self, totals: TokenTotals) -> None:
         totals_table = self.query_one("#totals-table", DataTable)
@@ -246,9 +251,10 @@ class DetailPane(Widget):
 
         self._refresh_totals(totals)
 
-        # Show the human message and assistant response
-        msg_widget = self.query_one("#message-section", Static)
-        msg_widget.display = True
+        # Show the human message, assistant response, and raw JSON
+        msg_scroll = self.query_one("#message-section", VerticalScroll)
+        msg_scroll.display = True
+        msg_scroll.scroll_home(animate=False)
 
         content = Text()
 
@@ -270,10 +276,8 @@ class DetailPane(Widget):
                 content.append(f"  {name}\n", style="bright_yellow")
                 for key, val in inp.items():
                     val_str = str(val) if not isinstance(val, str) else val
-                    # Truncate large blobs (prompts, file contents, commands)
                     if len(val_str) > 400:
                         val_str = val_str[:400] + "…"
-                    # Indent multi-line values
                     val_str = val_str.replace("\n", "\n        ")
                     content.append(f"    {key}: ", style="dim")
                     content.append(f"{val_str}\n", style="white")
@@ -283,7 +287,12 @@ class DetailPane(Widget):
             for path in turn.files_read:
                 content.append(f"  {path}\n", style="bright_blue")
 
-        msg_widget.update(content)
+        content.append("\n\nRaw JSON — user message\n", style="bold bright_white")
+        content.append(json.dumps(turn.raw_user, indent=2), style="dim")
+        content.append("\n\nRaw JSON — assistant message\n", style="bold bright_white")
+        content.append(json.dumps(turn.raw_assistant, indent=2), style="dim")
+
+        self.query_one("#message-body", Static).update(content)
 
     def update_category(self, turn: TurnStats, cat_name: str) -> None:
         """Show individual items within a category for a turn."""

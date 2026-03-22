@@ -169,6 +169,7 @@ def load_session(jsonl_file: Path) -> SessionStats:
     turns: list[TurnStats] = []
     pending_user_text: str | None = None
     pending_human_text: str = ""
+    pending_user_msg: dict = {}
     after_compact = False
     turn_number = 0
     is_first_turn = True  # system prompt only attributed to the first turn
@@ -180,6 +181,7 @@ def load_session(jsonl_file: Path) -> SessionStats:
             content = msg.get("message", {}).get("content", "")
             pending_user_text = _extract_text(content)
             pending_human_text = _extract_human_text(content)
+            pending_user_msg = msg
             after_compact = i in compact_positions
 
         elif msg_type == "assistant":
@@ -220,9 +222,12 @@ def load_session(jsonl_file: Path) -> SessionStats:
                 assistant_text=assistant_text,
                 files_read=files_read,
                 tool_calls=tool_calls,
+                raw_user=pending_user_msg,
+                raw_assistant=msg,
             ))
             pending_user_text = None
             pending_human_text = ""
+            pending_user_msg = {}
             after_compact = False
             is_first_turn = False
 

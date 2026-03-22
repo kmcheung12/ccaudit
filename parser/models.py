@@ -61,6 +61,8 @@ class TurnStats:
     assistant_text: str = ""  # assistant's text response
     files_read: list[str] = field(default_factory=list)  # file paths accessed via tools
     tool_calls: list[tuple[str, dict]] = field(default_factory=list)  # (tool_name, input_dict)
+    raw_user: dict = field(default_factory=dict)      # raw JSONL user message
+    raw_assistant: dict = field(default_factory=dict) # raw JSONL assistant message
 
 
 @dataclass
