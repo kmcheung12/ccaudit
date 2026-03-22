@@ -1,9 +1,10 @@
 # tui/app.py
 from __future__ import annotations
 from textual.app import App, ComposeResult
-from textual.widgets import Header, Footer, Input
+from textual.widgets import Header, Footer, Input, DataTable
 from textual.containers import Horizontal, Vertical
 from textual.binding import Binding
+from textual import events
 from parser.loader import list_projects
 from parser.models import GlobalStats, TurnStats
 from tui.tree import StatsTree, NodeSelected
@@ -79,6 +80,16 @@ class CCAuditApp(App):
         tree = self.query_one("#tree-pane", StatsTree)
         tree.filter("")
         self.query_one("#tree-pane").focus()
+
+    def on_key(self, event: events.Key) -> None:
+        tree_pane = self.query_one("#tree-pane", StatsTree)
+        detail_pane = self.query_one("#detail-pane", DetailPane)
+        if event.key == "right" and tree_pane.has_focus_within:
+            detail_pane.query_one("#category-table", DataTable).focus()
+            event.stop()
+        elif event.key == "left" and detail_pane.has_focus_within:
+            tree_pane.query_one("#stats-tree").focus()
+            event.stop()
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "filter-bar":

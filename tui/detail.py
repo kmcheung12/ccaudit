@@ -287,10 +287,18 @@ class DetailPane(Widget):
             for path in turn.files_read:
                 content.append(f"  {path}\n", style="bright_blue")
 
-        content.append("\n\nRaw JSON — user message\n", style="bold bright_white")
-        content.append(json.dumps(turn.raw_user, indent=2), style="dim")
+        user_json = json.dumps(turn.raw_user, indent=2)
+        asst_json = json.dumps(turn.raw_assistant, indent=2)
+        user_words = len(user_json.split())
+        asst_words = len(asst_json.split())
+        content.append("\n\nContent size (word count ≈ token proxy)\n", style="bold bright_white")
+        content.append(f"  User message:      {user_words:,} words\n", style="dim")
+        content.append(f"  Assistant message: {asst_words:,} words\n", style="dim")
+
+        content.append("\nRaw JSON — user message\n", style="bold bright_white")
+        content.append(user_json, style="dim")
         content.append("\n\nRaw JSON — assistant message\n", style="bold bright_white")
-        content.append(json.dumps(turn.raw_assistant, indent=2), style="dim")
+        content.append(asst_json, style="dim")
 
         self.query_one("#message-body", Static).update(content)
 
