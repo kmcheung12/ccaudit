@@ -5,6 +5,7 @@ from parser.models import (
 )
 from textual.widgets import DataTable, Static
 from textual.widget import Widget
+from textual.containers import Vertical, VerticalScroll
 from rich.text import Text
 
 
@@ -88,9 +89,18 @@ def build_category_rows(turn: TurnStats, cat_name: str) -> list[tuple[str, int]]
     return rows
 
 
-def build_turn_chart(session: SessionStats, bar_width: int = 28) -> Text:
+def build_turn_chart_legend() -> Text:
+    """Build the colour legend for the turn chart."""
+    result = Text()
+    for cat, style in _CAT_STYLE.items():
+        result.append("█", style=style)
+        result.append(f" {cat}  ", style="dim")
+    return result
+
+
+def build_turn_chart_bars(session: SessionStats, bar_width: int = 28) -> Text:
     """
-    Build a per-turn stacked bar chart for a session.
+    Build per-turn stacked bar rows for a session (no legend).
 
     Each row = one turn. Bar width proportional to cache_create + input (new context
     added this turn). Segments coloured by category. ⚡ marks post-compact turns.
@@ -130,11 +140,6 @@ def build_turn_chart(session: SessionStats, bar_width: int = 28) -> Text:
         result.append_text(bar)
         result.append(f"  →{turn.output_tokens:,}")
 
-    # Legend
-    result.append("\n\n")
-    for cat, style in _CAT_STYLE.items():
-        result.append("█", style=style)
-        result.append(f" {cat}  ", style="dim")
     return result
 
 
@@ -148,7 +153,19 @@ class DetailPane(Widget):
     #chart-section {
         display: none;
         border-top: solid $panel;
-        padding: 1 1;
+        height: auto;
+        max-height: 24;
+    }
+    #chart-legend {
+        padding: 1 1 0 1;
+        height: auto;
+    }
+    #chart-scroll {
+        height: auto;
+        max-height: 16;
+        padding: 0 1 1 1;
+    }
+    #chart-bars {
         height: auto;
     }
     #message-section {
@@ -162,7 +179,10 @@ class DetailPane(Widget):
     def compose(self):
         yield DataTable(id="category-table")
         yield DataTable(id="totals-table")
-        yield Static("", id="chart-section")
+        with Vertical(id="chart-section"):
+            yield Static("", id="chart-legend")
+            with VerticalScroll(id="chart-scroll"):
+                yield Static("", id="chart-bars")
         yield Static("", id="message-section")
 
     def on_mount(self) -> None:
@@ -173,7 +193,7 @@ class DetailPane(Widget):
         totals_table.add_columns("", "Tokens")
 
     def _hide_extras(self) -> None:
-        self.query_one("#chart-section").display = False
+        self.query_one("#chart-section", Vertical).display = False
         self.query_one("#message-section").display = False
 
     def _refresh_totals(self, totals: TokenTotals) -> None:
@@ -198,9 +218,10 @@ class DetailPane(Widget):
 
         # Session: show per-turn activity chart below the tables
         if isinstance(node, SessionStats):
-            chart = self.query_one("#chart-section", Static)
-            chart.display = True
-            chart.update(build_turn_chart(node))
+            chart_section = self.query_one("#chart-section", Vertical)
+            chart_section.display = True
+            self.query_one("#chart-legend", Static).update(build_turn_chart_legend())
+            self.query_one("#chart-bars", Static).update(build_turn_chart_bars(node))
 
     def update_turn(self, turn: TurnStats) -> None:
         """Refresh for a TurnStats node — shows category breakdown and message preview."""
