@@ -1,0 +1,2 @@
+textual>=0.80.0
+pytest>=8.0
