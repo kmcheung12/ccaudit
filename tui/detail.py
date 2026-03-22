@@ -250,17 +250,33 @@ class DetailPane(Widget):
         msg_widget = self.query_one("#message-section", Static)
         msg_widget.display = True
 
-        user_preview = turn.user_text or "(no message text)"
-        asst_preview = turn.assistant_text or "(no response text)"
         content = Text()
+
         content.append("User\n", style="bold bright_white")
-        content.append(user_preview, style="dim")
+        if turn.user_text:
+            content.append(turn.user_text, style="dim")
+        else:
+            content.append("(tool result — output tokens from previous turn's tool calls)", style="dim italic")
+
         content.append("\n\nAssistant\n", style="bold bright_white")
-        content.append(asst_preview, style="dim")
+        if turn.assistant_text:
+            content.append(turn.assistant_text, style="dim")
+        else:
+            content.append("(no text — assistant made tool calls only)", style="dim italic")
+
+        if turn.tool_calls:
+            content.append("\n\nTool calls\n", style="bold bright_white")
+            for name, param in turn.tool_calls:
+                content.append(f"  {name}", style="bright_yellow")
+                if param:
+                    content.append(f"  {param}", style="dim")
+                content.append("\n")
+
         if turn.files_read:
-            content.append("\n\nFiles accessed\n", style="bold bright_white")
+            content.append("\nFiles read\n", style="bold bright_white")
             for path in turn.files_read:
                 content.append(f"  {path}\n", style="bright_blue")
+
         msg_widget.update(content)
 
     def update_category(self, turn: TurnStats, cat_name: str) -> None:

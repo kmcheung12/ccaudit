@@ -81,25 +81,54 @@ def _extract_human_text(content) -> str:
     return ""
 
 
-def _extract_files_read(content) -> list[str]:
-    """Extract file paths from tool_use blocks in an assistant message."""
+def _extract_tool_calls(content) -> tuple[list[str], list[tuple[str, str]]]:
+    """
+    Extract tool usage from tool_use blocks in an assistant message.
+
+    Returns:
+        files_read: paths from Read/Glob/Grep calls
+        tool_calls: list of (tool_name, key_param) for all tool_use blocks
+    """
     if not isinstance(content, list):
-        return []
-    files = []
+        return [], []
+    files: list[str] = []
+    calls: list[tuple[str, str]] = []
     for block in content:
         if not isinstance(block, dict) or block.get("type") != "tool_use":
             continue
         tool = block.get("name", "")
-        inp = block.get("input", {})
+        inp = block.get("input", {}) if isinstance(block.get("input"), dict) else {}
+        # Derive a short key parameter for display
         if tool == "Read":
-            path = inp.get("file_path", "")
-            if path:
-                files.append(path)
-        elif tool in ("Glob", "Grep"):
-            path = inp.get("path") or inp.get("pattern") or ""
-            if path:
-                files.append(f"{tool}:{path}")
-    return files
+            param = inp.get("file_path", "")
+            if param:
+                files.append(param)
+        elif tool == "Glob":
+            param = inp.get("pattern", inp.get("path", ""))
+            if param:
+                files.append(f"Glob:{param}")
+        elif tool == "Grep":
+            param = inp.get("pattern", "")
+            path = inp.get("path", "")
+            param = f"{param!r} in {path}" if path else repr(param)
+            if param:
+                files.append(f"Grep:{param}")
+        elif tool == "Bash":
+            param = inp.get("command", "")[:80]
+        elif tool in ("Edit", "Write"):
+            param = inp.get("file_path", "")
+        elif tool == "WebFetch":
+            param = inp.get("url", "")[:80]
+        elif tool == "Agent":
+            param = inp.get("description", "subagent")[:60]
+        else:
+            param = next(iter(inp.values()), "") if inp else ""
+            if isinstance(param, str):
+                param = param[:60]
+            else:
+                param = ""
+        calls.append((tool, param))
+    return files, calls
 
 
 def _extract_assistant_text(content) -> str:
@@ -189,7 +218,7 @@ def load_session(jsonl_file: Path) -> SessionStats:
 
             assistant_content = msg.get("message", {}).get("content", "")
             assistant_text = _extract_assistant_text(assistant_content)
-            files_read = _extract_files_read(assistant_content)
+            files_read, tool_calls = _extract_tool_calls(assistant_content)
 
             turn_number += 1
             turns.append(TurnStats(
@@ -204,6 +233,7 @@ def load_session(jsonl_file: Path) -> SessionStats:
                 user_text=pending_human_text,
                 assistant_text=assistant_text,
                 files_read=files_read,
+                tool_calls=tool_calls,
             ))
             pending_user_text = None
             pending_human_text = ""

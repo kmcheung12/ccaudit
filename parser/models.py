@@ -60,6 +60,7 @@ class TurnStats:
     user_text: str = ""       # human-typed portion of the user message
     assistant_text: str = ""  # assistant's text response
     files_read: list[str] = field(default_factory=list)  # file paths accessed via tools
+    tool_calls: list[tuple[str, str]] = field(default_factory=list)  # (tool_name, key_param)
 
 
 @dataclass
