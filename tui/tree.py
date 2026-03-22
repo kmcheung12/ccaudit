@@ -5,7 +5,7 @@ from textual.widgets.tree import TreeNode
 from textual.widget import Widget
 from textual.message import Message
 from textual.binding import Binding
-from parser.models import GlobalStats, ProjectStats
+from parser.models import GlobalStats, ProjectStats, TurnStats
 from parser.loader import load_project
 
 
@@ -110,6 +110,27 @@ class StatsTree(Widget):
     def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
         if event.node.data is not None:
             self.post_message(NodeSelected(event.node.data))
+
+    def _find_node_by_data(self, root: TreeNode, target) -> TreeNode | None:
+        for child in root.children:
+            if child.data is target:
+                return child
+            found = self._find_node_by_data(child, target)
+            if found:
+                return found
+        return None
+
+    def select_turn(self, turn: TurnStats) -> None:
+        """Move the tree cursor to the node representing `turn`, expanding ancestors."""
+        tree = self.query_one("#stats-tree", _NavTree)
+        node = self._find_node_by_data(tree.root, turn)
+        if node is None:
+            return
+        ancestor = node.parent
+        while ancestor and ancestor is not tree.root:
+            ancestor.expand()
+            ancestor = ancestor.parent
+        tree.move_cursor(node)
 
     def filter(self, query: str) -> None:
         """Filter project nodes by case-insensitive substring match on display name.

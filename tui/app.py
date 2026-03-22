@@ -65,6 +65,7 @@ class CCAuditApp(App):
             detail.update_category(turn, cat_name)
         elif isinstance(data, TurnStats):
             detail.update_turn(data)
+            self.query_one("#tree-pane", StatsTree).select_turn(data)
         else:
             detail.update(data)
 
