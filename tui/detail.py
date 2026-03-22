@@ -226,8 +226,11 @@ def build_chart_bars(rows: list[BarRow], bar_width: int = 28, cursor: int = -1) 
     return result
 
 
-class BarChart(Widget):
-    """Focusable stacked bar chart. Up/Down moves cursor; Enter selects the row."""
+class BarChart(Static):
+    """Focusable stacked bar chart. Up/Down moves cursor; Enter selects the row.
+
+    Subclasses Static so that height: auto correctly sizes to rendered content.
+    """
 
     can_focus = True
 
@@ -247,28 +250,25 @@ class BarChart(Widget):
     ]
 
     def __init__(self, **kwargs) -> None:
-        super().__init__(**kwargs)
+        super().__init__("", **kwargs)
         self._rows: list[BarRow] = []
         self._cursor: int = 0
 
     def set_rows(self, rows: list[BarRow]) -> None:
         self._rows = rows
         self._cursor = 0
-        self.refresh()
-
-    def render(self) -> Text:
-        return build_chart_bars(self._rows, cursor=self._cursor)
+        self.update(build_chart_bars(self._rows, cursor=self._cursor))
 
     def action_cursor_up(self) -> None:
         if self._cursor > 0:
             self._cursor -= 1
-            self.refresh()
+            self.update(build_chart_bars(self._rows, cursor=self._cursor))
             self._scroll_into_view()
 
     def action_cursor_down(self) -> None:
         if self._cursor < len(self._rows) - 1:
             self._cursor += 1
-            self.refresh()
+            self.update(build_chart_bars(self._rows, cursor=self._cursor))
             self._scroll_into_view()
 
     def action_select_row(self) -> None:
