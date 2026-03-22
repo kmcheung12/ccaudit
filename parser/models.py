@@ -57,6 +57,8 @@ class TurnStats:
     output_tokens: int
     category_breakdown: CategoryBreakdown
     after_compact: bool = False
+    user_text: str = ""       # human-typed portion of the user message
+    assistant_text: str = ""  # assistant's text response
 
 
 @dataclass

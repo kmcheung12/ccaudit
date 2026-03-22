@@ -5,7 +5,7 @@ from textual.widgets import Header, Footer, Input
 from textual.containers import Horizontal, Vertical
 from textual.binding import Binding
 from parser.loader import list_projects
-from parser.models import GlobalStats
+from parser.models import GlobalStats, TurnStats
 from tui.tree import StatsTree, NodeSelected
 from tui.detail import DetailPane
 
@@ -58,10 +58,12 @@ class CCAuditApp(App):
     def on_node_selected(self, event: NodeSelected) -> None:
         detail = self.query_one("#detail-pane", DetailPane)
         data = event.data
-        # Category-level node: (turn, cat_name) tuple — show items within that category
+        # Category-level node: (turn, cat_name) tuple
         if isinstance(data, tuple) and len(data) == 2:
             turn, cat_name = data
             detail.update_category(turn, cat_name)
+        elif isinstance(data, TurnStats):
+            detail.update_turn(data)
         else:
             detail.update(data)
 

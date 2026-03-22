@@ -63,6 +63,37 @@ def _extract_text(content) -> str:
     return ""
 
 
+def _extract_human_text(content) -> str:
+    """Extract the human-typed portion of a user message (last plain text block).
+
+    Claude Code injects skills/memory/system-reminders before the human message,
+    so the human text is typically the last text block in the content list.
+    """
+    if isinstance(content, str):
+        return content[:800]
+    if isinstance(content, list):
+        # Walk backwards to find last text block that isn't pure injected context
+        for block in reversed(content):
+            if isinstance(block, dict) and block.get("type") == "text":
+                text = block.get("text", "").strip()
+                if text and not text.startswith("<system-reminder>") and not text.startswith("Base directory:"):
+                    return text[:800]
+    return ""
+
+
+def _extract_assistant_text(content) -> str:
+    """Extract plain text from an assistant message content."""
+    if isinstance(content, str):
+        return content[:800]
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                parts.append(block.get("text", ""))
+        return "\n".join(parts)[:800]
+    return ""
+
+
 def load_session(jsonl_file: Path) -> SessionStats:
     """Parse a .jsonl file into a SessionStats."""
     session_id = jsonl_file.stem
@@ -101,8 +132,10 @@ def load_session(jsonl_file: Path) -> SessionStats:
     # Build turns: pair each user message with the next assistant message
     turns: list[TurnStats] = []
     pending_user_text: str | None = None
+    pending_human_text: str = ""
     after_compact = False
     turn_number = 0
+    is_first_turn = True  # system prompt only attributed to the first turn
 
     for i, msg in enumerate(raw_messages):
         msg_type = msg.get("type")
@@ -110,6 +143,7 @@ def load_session(jsonl_file: Path) -> SessionStats:
         if msg_type == "user":
             content = msg.get("message", {}).get("content", "")
             pending_user_text = _extract_text(content)
+            pending_human_text = _extract_human_text(content)
             after_compact = i in compact_positions
 
         elif msg_type == "assistant":
@@ -122,12 +156,18 @@ def load_session(jsonl_file: Path) -> SessionStats:
             cache_create = usage.get("cache_creation_input_tokens", 0)
             output_tokens = usage.get("output_tokens", 0)
 
+            # System prompt only attributed to the first turn of the session
+            sp_tokens = system_prompt_tokens if is_first_turn else 0
+
             text = pending_user_text or ""
             breakdown = categorizer.categorize(
                 text=text,
                 input_tokens=input_tokens,
-                system_prompt_tokens=system_prompt_tokens,
+                system_prompt_tokens=sp_tokens,
             )
+
+            assistant_content = msg.get("message", {}).get("content", "")
+            assistant_text = _extract_assistant_text(assistant_content)
 
             turn_number += 1
             turns.append(TurnStats(
@@ -139,9 +179,13 @@ def load_session(jsonl_file: Path) -> SessionStats:
                 output_tokens=output_tokens,
                 category_breakdown=breakdown,
                 after_compact=after_compact,
+                user_text=pending_human_text,
+                assistant_text=assistant_text,
             ))
             pending_user_text = None
+            pending_human_text = ""
             after_compact = False
+            is_first_turn = False
 
     first_timestamp = None
     for msg in raw_messages:

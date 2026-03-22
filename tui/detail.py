@@ -3,8 +3,9 @@ from dataclasses import dataclass
 from parser.models import (
     CategoryBreakdown, CategoryItem, TurnStats, SessionStats, ProjectStats, GlobalStats, CATEGORIES,
 )
-from textual.widgets import DataTable
+from textual.widgets import DataTable, Static
 from textual.widget import Widget
+from rich.text import Text
 
 
 @dataclass
@@ -13,6 +14,17 @@ class TokenTotals:
     cache_read: int
     cache_create: int
     output: int
+
+
+# Category display colours (Rich style strings)
+_CAT_STYLE = {
+    "Messages":      "bright_magenta",
+    "Skills":        "bright_yellow",
+    "Memory":        "bright_green",
+    "System Prompt": "white",
+    "Tools":         "bright_blue",
+    "Agents":        "bright_cyan",
+}
 
 
 def _get_totals(node) -> TokenTotals:
@@ -42,8 +54,6 @@ def build_rows(node) -> tuple[list[tuple[str, int, float]], TokenTotals]:
     """
     if isinstance(node, TurnStats):
         cat_totals = node.category_breakdown.category_totals()
-    elif isinstance(node, CategoryBreakdown):
-        cat_totals = node.category_totals()
     else:
         cat_totals = node.category_totals()
 
@@ -78,6 +88,56 @@ def build_category_rows(turn: TurnStats, cat_name: str) -> list[tuple[str, int]]
     return rows
 
 
+def build_turn_chart(session: SessionStats, bar_width: int = 28) -> Text:
+    """
+    Build a per-turn stacked bar chart for a session.
+
+    Each row = one turn. Bar width proportional to cache_create + input (new context
+    added this turn). Segments coloured by category. ⚡ marks post-compact turns.
+    """
+    if not session.turns:
+        return Text("(no turns)", style="dim")
+
+    max_ctx = max(t.cache_create_tokens + t.input_tokens for t in session.turns) or 1
+
+    result = Text()
+    for i, turn in enumerate(session.turns):
+        if i > 0:
+            result.append("\n")
+
+        ctx = turn.cache_create_tokens + turn.input_tokens
+        filled = max(1, round((ctx / max_ctx) * bar_width))
+
+        # Build coloured bar segments from category breakdown
+        cat_totals = turn.category_breakdown.category_totals()
+        total_cat = sum(cat_totals.values()) or 1
+        bar = Text()
+        used = 0
+        for cat in CATEGORIES:
+            tokens = cat_totals.get(cat, 0)
+            if tokens == 0:
+                continue
+            chars = round((tokens / total_cat) * filled)
+            chars = min(chars, filled - used)
+            if chars > 0:
+                bar.append("█" * chars, style=_CAT_STYLE.get(cat, "white"))
+                used += chars
+        if used < filled:
+            bar.append("█" * (filled - used), style="dim")
+
+        prefix = "⚡" if turn.after_compact else " "
+        result.append(f"{prefix}T{turn.turn_number:2d} {ctx:6,}  ")
+        result.append_text(bar)
+        result.append(f"  →{turn.output_tokens:,}")
+
+    # Legend
+    result.append("\n\n")
+    for cat, style in _CAT_STYLE.items():
+        result.append("█", style=style)
+        result.append(f" {cat}  ", style="dim")
+    return result
+
+
 class DetailPane(Widget):
     """Right-pane widget: shows category breakdown + token totals for selected node."""
 
@@ -85,11 +145,25 @@ class DetailPane(Widget):
     DetailPane {
         layout: vertical;
     }
+    #chart-section {
+        display: none;
+        border-top: solid $panel;
+        padding: 1 1;
+        height: auto;
+    }
+    #message-section {
+        display: none;
+        border-top: solid $panel;
+        padding: 1 1;
+        height: auto;
+    }
     """
 
     def compose(self):
         yield DataTable(id="category-table")
         yield DataTable(id="totals-table")
+        yield Static("", id="chart-section")
+        yield Static("", id="message-section")
 
     def on_mount(self) -> None:
         cat_table = self.query_one("#category-table", DataTable)
@@ -98,8 +172,21 @@ class DetailPane(Widget):
         totals_table = self.query_one("#totals-table", DataTable)
         totals_table.add_columns("", "Tokens")
 
+    def _hide_extras(self) -> None:
+        self.query_one("#chart-section").display = False
+        self.query_one("#message-section").display = False
+
+    def _refresh_totals(self, totals: TokenTotals) -> None:
+        totals_table = self.query_one("#totals-table", DataTable)
+        totals_table.clear()
+        totals_table.add_row("Input (fresh)", f"{totals.input_tokens:,}")
+        totals_table.add_row("Cache read",    f"{totals.cache_read:,}")
+        totals_table.add_row("Cache write",   f"{totals.cache_create:,}")
+        totals_table.add_row("Output",        f"{totals.output:,}")
+
     def update(self, node) -> None:
-        """Refresh both tables for the given stats node."""
+        """Refresh for GlobalStats, ProjectStats, or SessionStats."""
+        self._hide_extras()
         rows, totals = build_rows(node)
 
         cat_table = self.query_one("#category-table", DataTable)
@@ -107,15 +194,42 @@ class DetailPane(Widget):
         for name, tokens, pct in rows:
             cat_table.add_row(name, f"{tokens:,}", f"{pct:.1f}%")
 
-        totals_table = self.query_one("#totals-table", DataTable)
-        totals_table.clear()
-        totals_table.add_row("Input (fresh)", f"{totals.input_tokens:,}")
-        totals_table.add_row("Cache read", f"{totals.cache_read:,}")
-        totals_table.add_row("Cache write", f"{totals.cache_create:,}")
-        totals_table.add_row("Output", f"{totals.output:,}")
+        self._refresh_totals(totals)
+
+        # Session: show per-turn activity chart below the tables
+        if isinstance(node, SessionStats):
+            chart = self.query_one("#chart-section", Static)
+            chart.display = True
+            chart.update(build_turn_chart(node))
+
+    def update_turn(self, turn: TurnStats) -> None:
+        """Refresh for a TurnStats node — shows category breakdown and message preview."""
+        self._hide_extras()
+        rows, totals = build_rows(turn)
+
+        cat_table = self.query_one("#category-table", DataTable)
+        cat_table.clear()
+        for name, tokens, pct in rows:
+            cat_table.add_row(name, f"{tokens:,}", f"{pct:.1f}%")
+
+        self._refresh_totals(totals)
+
+        # Show the human message and assistant response
+        msg_widget = self.query_one("#message-section", Static)
+        msg_widget.display = True
+
+        user_preview = turn.user_text or "(no message text)"
+        asst_preview = turn.assistant_text or "(no response text)"
+        content = Text()
+        content.append("User\n", style="bold bright_white")
+        content.append(user_preview, style="dim")
+        content.append("\n\nAssistant\n", style="bold bright_white")
+        content.append(asst_preview, style="dim")
+        msg_widget.update(content)
 
     def update_category(self, turn: TurnStats, cat_name: str) -> None:
         """Show individual items within a category for a turn."""
+        self._hide_extras()
         rows = build_category_rows(turn, cat_name)
 
         cat_table = self.query_one("#category-table", DataTable)
@@ -128,11 +242,5 @@ class DetailPane(Widget):
                 pct = (tokens / total * 100) if total > 0 else 0.0
                 cat_table.add_row(name, f"{tokens:,}", f"{pct:.1f}%")
 
-        # Totals pane shows the parent turn's totals for context
         _, totals = build_rows(turn)
-        totals_table = self.query_one("#totals-table", DataTable)
-        totals_table.clear()
-        totals_table.add_row("Input (fresh)", f"{totals.input_tokens:,}")
-        totals_table.add_row("Cache read", f"{totals.cache_read:,}")
-        totals_table.add_row("Cache write", f"{totals.cache_create:,}")
-        totals_table.add_row("Output", f"{totals.output:,}")
+        self._refresh_totals(totals)
