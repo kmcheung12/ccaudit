@@ -153,16 +153,14 @@ class DetailPane(Widget):
     #chart-section {
         display: none;
         border-top: solid $panel;
-        height: auto;
-        max-height: 24;
+        height: 1fr;
     }
     #chart-legend {
         padding: 1 1 0 1;
         height: auto;
     }
     #chart-scroll {
-        height: auto;
-        max-height: 16;
+        height: 1fr;
         padding: 0 1 1 1;
     }
     #chart-bars {
