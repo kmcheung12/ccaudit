@@ -4,6 +4,7 @@ from textual.widgets import Tree
 from textual.widgets.tree import TreeNode
 from textual.widget import Widget
 from textual.message import Message
+from textual.binding import Binding
 from parser.models import GlobalStats, ProjectStats
 from parser.loader import load_project
 
@@ -85,6 +86,20 @@ class StatsTree(Widget):
             return
         # First time — load from disk
         self._populate_project_node(node, project)
+
+    def on_key_left(self) -> None:
+        """Move to parent node when left arrow is pressed."""
+        tree = self.query_one("#stats-tree", Tree)
+        node = tree.cursor_node
+        if node is None:
+            return
+        parent = node.parent
+        if parent is None or parent is tree.root:
+            return
+        tree.move_cursor(parent)
+        # Collapse node if it was expanded, then select parent
+        if node.is_expanded:
+            node.collapse()
 
     def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
         if event.node.data is not None:
