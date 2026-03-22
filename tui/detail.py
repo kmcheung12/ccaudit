@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from parser.models import (
     CategoryBreakdown, CategoryItem, TurnStats, SessionStats, ProjectStats, GlobalStats, CATEGORIES,
 )
+from parser.loader import load_project
 from textual.widgets import DataTable, Static
 from textual.widget import Widget
 from textual.containers import Vertical, VerticalScroll
@@ -102,9 +103,10 @@ def build_category_rows(turn: TurnStats, cat_name: str) -> list[tuple[str, int]]
 
 
 def build_chart_legend() -> Text:
-    """Build the colour legend shared by all bar charts."""
+    """Build the colour legend shared by all bar charts (same order as bar segments)."""
     result = Text()
-    for cat, style in _CAT_STYLE.items():
+    for cat in CATEGORIES:
+        style = _CAT_STYLE.get(cat, "white")
         result.append("█", style=style)
         result.append(f" {cat}  ", style="dim")
     result.append("░", style="dim")
@@ -347,6 +349,8 @@ class DetailPane(Widget):
 
     def update(self, node) -> None:
         """Refresh for GlobalStats, ProjectStats, or SessionStats."""
+        if isinstance(node, ProjectStats) and not node.loaded:
+            load_project(node)
         self._hide_extras()
         rows, totals = build_rows(node)
 
