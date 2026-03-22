@@ -11,9 +11,10 @@ from parser.loader import load_project
 
 class NodeSelected(Message):
     """Posted when the user selects a tree node."""
-    def __init__(self, data) -> None:
+    def __init__(self, data, sync_tree: bool = False) -> None:
         super().__init__()
         self.data = data
+        self.sync_tree = sync_tree  # True only when source is bar chart (not the tree itself)
 
 
 class _NavTree(Tree):
@@ -128,7 +129,8 @@ class StatsTree(Widget):
             return
         ancestor = node.parent
         while ancestor and ancestor is not tree.root:
-            ancestor.expand()
+            if not ancestor.is_expanded:
+                ancestor.expand()
             ancestor = ancestor.parent
         tree.move_cursor(node)
 

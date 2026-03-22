@@ -272,7 +272,7 @@ class BarChart(Widget):
     def action_select_row(self) -> None:
         from tui.tree import NodeSelected
         if self._rows:
-            self.post_message(NodeSelected(self._rows[self._cursor].data))
+            self.post_message(NodeSelected(self._rows[self._cursor].data, sync_tree=True))
 
     def _scroll_into_view(self) -> None:
         parent = self.parent
