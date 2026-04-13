@@ -18,11 +18,6 @@ def test_skills_text_block():
     assert result["Skills"] > 0
     assert result["Messages"] == 0
 
-def test_memory_text_block():
-    text = "---\nname: my-memory\ndescription: test\ntype: user\n---\nsome content"
-    content = [{"type": "text", "text": text}]
-    result = classify_user_blocks(content, tool_name_by_id={})
-    assert result["Memory"] > 0
 
 def test_system_reminder_text_block():
     text = "<system-reminder>hook output here</system-reminder>"

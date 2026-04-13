@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 
-CATEGORIES = ["Skills", "Memory", "Tools", "MCP", "Agents", "Messages", "Other"]
+CATEGORIES = ["Skills", "Tools", "MCP", "Agents", "Messages", "Other"]
 
 
 @dataclass
@@ -15,7 +15,6 @@ class CategoryItem:
 @dataclass
 class CategoryBreakdown:
     skills: list[CategoryItem] = field(default_factory=list)
-    memory: list[CategoryItem] = field(default_factory=list)
     tools: list[CategoryItem] = field(default_factory=list)
     mcp_tools: list[CategoryItem] = field(default_factory=list)
     agents: list[CategoryItem] = field(default_factory=list)
@@ -25,7 +24,6 @@ class CategoryBreakdown:
     def category_totals(self) -> dict[str, int]:
         return {
             "Skills":   sum(i.tokens for i in self.skills),
-            "Memory":   sum(i.tokens for i in self.memory),
             "Tools":    sum(i.tokens for i in self.tools),
             "MCP":      sum(i.tokens for i in self.mcp_tools),
             "Agents":   sum(i.tokens for i in self.agents),
@@ -41,7 +39,6 @@ def _merge_breakdowns(breakdowns: list[CategoryBreakdown]) -> CategoryBreakdown:
     merged = CategoryBreakdown()
     for bd in breakdowns:
         merged.skills.extend(bd.skills)
-        merged.memory.extend(bd.memory)
         merged.tools.extend(bd.tools)
         merged.mcp_tools.extend(bd.mcp_tools)
         merged.agents.extend(bd.agents)

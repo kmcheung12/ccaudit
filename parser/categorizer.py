@@ -7,8 +7,6 @@ def _classify_text_block(text: str, is_last_text: bool) -> str:
     first_line = text.split("\n", 1)[0]
     if first_line.startswith("Base directory") and "/skills/" in first_line:
         return "Skills"
-    if first_line.strip() == "---" and "name:" in text:
-        return "Memory"
     if "<system-reminder>" in text:
         return "Tools"
     if is_last_text:
@@ -17,7 +15,7 @@ def _classify_text_block(text: str, is_last_text: bool) -> str:
 
 
 def classify_user_blocks(content, tool_name_by_id: dict) -> dict:
-    counts = {"Skills": 0, "Memory": 0, "Tools": 0, "MCP": 0, "Agents": 0, "Messages": 0, "Other": 0}
+    counts = {"Skills": 0, "Tools": 0, "MCP": 0, "Agents": 0, "Messages": 0, "Other": 0}
     if isinstance(content, str):
         counts["Messages"] += len(content)
         return counts
@@ -44,7 +42,7 @@ def classify_user_blocks(content, tool_name_by_id: dict) -> dict:
 
 
 def classify_assistant_blocks(content) -> dict:
-    counts = {"Skills": 0, "Memory": 0, "Tools": 0, "MCP": 0, "Agents": 0, "Messages": 0, "Other": 0}
+    counts = {"Skills": 0, "Tools": 0, "MCP": 0, "Agents": 0, "Messages": 0, "Other": 0}
     if isinstance(content, str):
         counts["Messages"] += len(content)
         return counts
@@ -75,7 +73,7 @@ def categorize_turn(human_content, intermediate_pairs, prior_assistant_content, 
             if isinstance(block, dict) and block.get("type") == "tool_use":
                 tool_name_by_id[block["id"]] = block.get("name", "")
 
-    totals = {"Skills": 0, "Memory": 0, "Tools": 0, "MCP": 0, "Agents": 0, "Messages": 0, "Other": 0}
+    totals = {"Skills": 0, "Tools": 0, "MCP": 0, "Agents": 0, "Messages": 0, "Other": 0}
 
     def _add(counts: dict) -> None:
         for cat, n in counts.items():
@@ -99,7 +97,6 @@ def categorize_turn(human_content, intermediate_pairs, prior_assistant_content, 
 
     bd = CategoryBreakdown()
     bd.skills    = [CategoryItem(name="Skills",  tokens=scale(totals["Skills"]))]  if totals["Skills"]  else []
-    bd.memory    = [CategoryItem(name="Memory",  tokens=scale(totals["Memory"]))]  if totals["Memory"]  else []
     bd.tools     = [CategoryItem(name="Tools",   tokens=scale(totals["Tools"]))]   if totals["Tools"]   else []
     bd.mcp_tools = [CategoryItem(name="MCP",     tokens=scale(totals["MCP"]))]     if totals["MCP"]     else []
     bd.agents    = [CategoryItem(name="Agents",  tokens=scale(totals["Agents"]))]  if totals["Agents"]  else []
@@ -107,7 +104,6 @@ def categorize_turn(human_content, intermediate_pairs, prior_assistant_content, 
 
     attributed = (
         sum(i.tokens for i in bd.skills)
-        + sum(i.tokens for i in bd.memory)
         + sum(i.tokens for i in bd.tools)
         + sum(i.tokens for i in bd.mcp_tools)
         + sum(i.tokens for i in bd.agents)

@@ -39,7 +39,6 @@ class BarRow:
 _CAT_STYLE = {
     "Messages": "orange1",
     "Skills":   "bright_yellow",
-    "Memory":   "bright_green",
     "Tools":    "bright_blue",
     "MCP":      "bright_red",
     "Agents":   "bright_cyan",
@@ -102,7 +101,6 @@ def build_category_rows(turn: TurnStats, cat_name: str) -> list[tuple[str, int]]
     bd = turn.category_breakdown
     mapping = {
         "Skills": bd.skills,
-        "Memory": bd.memory,
         "Tools": bd.tools,
         "Agents": bd.agents,
     }

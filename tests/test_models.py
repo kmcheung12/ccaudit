@@ -4,13 +4,11 @@ from parser.models import (
 )
 
 
-def make_breakdown(skills_tokens=0, memory_tokens=0, tools_tokens=0,
+def make_breakdown(skills_tokens=0, tools_tokens=0,
                    mcp_tokens=0, agents_tokens=0, messages_tokens=0, other_tokens=0):
     bd = CategoryBreakdown()
     if skills_tokens:
         bd.skills.append(CategoryItem(name="TestSkill", tokens=skills_tokens))
-    if memory_tokens:
-        bd.memory.append(CategoryItem(name="mem1", tokens=memory_tokens))
     if tools_tokens:
         bd.tools.append(CategoryItem(name="tool1", tokens=tools_tokens))
     if mcp_tokens:
@@ -39,10 +37,9 @@ def make_turn(input_t=100, cache_read=500, cache_create=200, output=50, breakdow
 # CategoryBreakdown tests
 
 def test_breakdown_category_totals():
-    bd = make_breakdown(skills_tokens=100, memory_tokens=50, messages_tokens=200)
+    bd = make_breakdown(skills_tokens=100, messages_tokens=200)
     totals = bd.category_totals()
     assert totals["Skills"] == 100
-    assert totals["Memory"] == 50
     assert totals["Messages"] == 200
     assert totals["Tools"] == 0
     assert totals["MCP"] == 0
@@ -51,8 +48,8 @@ def test_breakdown_category_totals():
 
 
 def test_breakdown_total_attributed_tokens():
-    bd = make_breakdown(skills_tokens=100, memory_tokens=50, messages_tokens=200, other_tokens=50)
-    assert bd.total_attributed_tokens() == 400
+    bd = make_breakdown(skills_tokens=100, messages_tokens=200, other_tokens=50)
+    assert bd.total_attributed_tokens() == 350
 
 
 def test_breakdown_includes_mcp():
