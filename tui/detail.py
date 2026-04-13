@@ -32,12 +32,13 @@ class BarRow:
 
 # Category display colours (Rich style strings)
 _CAT_STYLE = {
-    "Messages":      "bright_magenta",
-    "Skills":        "bright_yellow",
-    "Memory":        "bright_green",
-    "System Prompt": "white",
-    "Tools":         "bright_blue",
-    "Agents":        "bright_cyan",
+    "Messages": "bright_magenta",
+    "Skills":   "bright_yellow",
+    "Memory":   "bright_green",
+    "Tools":    "bright_blue",
+    "MCP":      "bright_red",
+    "Agents":   "bright_cyan",
+    "Other":    "white",
 }
 
 
@@ -289,6 +290,18 @@ class DetailPane(Widget):
     DetailPane {
         layout: vertical;
     }
+    #turn-path {
+        display: none;
+        padding: 0 1;
+        height: auto;
+        color: $text-muted;
+    }
+    #session-times {
+        display: none;
+        padding: 0 1;
+        height: auto;
+        color: $text-muted;
+    }
     #chart-section {
         display: none;
         border-top: solid $panel;
@@ -317,6 +330,8 @@ class DetailPane(Widget):
     """
 
     def compose(self):
+        yield Static("", id="turn-path")
+        yield Static("", id="session-times")
         yield DataTable(id="category-table")
         yield DataTable(id="totals-table")
         with Vertical(id="chart-section"):
@@ -327,13 +342,24 @@ class DetailPane(Widget):
             yield Static("", id="message-body")
 
     def on_mount(self) -> None:
-        cat_table = self.query_one("#category-table", DataTable)
-        cat_table.add_columns("Category", "Tokens", "%")
-
         totals_table = self.query_one("#totals-table", DataTable)
         totals_table.add_columns("", "Tokens")
 
+    def _refresh_category_table(self, cat_totals: dict) -> None:
+        total = sum(cat_totals.values()) or 1
+        cat_table = self.query_one("#category-table", DataTable)
+        cat_table.clear(columns=True)
+        for cat in CATEGORIES:
+            header = Text()
+            header.append("█ ", style=_CAT_STYLE.get(cat, "white"))
+            header.append(cat)
+            cat_table.add_column(header)
+        cat_table.add_row(*[f"{cat_totals.get(cat, 0):,}" for cat in CATEGORIES])
+        cat_table.add_row(*[f"{cat_totals.get(cat, 0) / total * 100:.1f}%" for cat in CATEGORIES])
+
     def _hide_extras(self) -> None:
+        self.query_one("#turn-path", Static).display = False
+        self.query_one("#session-times", Static).display = False
         self.query_one("#chart-section", Vertical).display = False
         self.query_one("#message-section", VerticalScroll).display = False
 
@@ -343,8 +369,8 @@ class DetailPane(Widget):
         total_in = totals.input_tokens + totals.cache_read + totals.cache_create
         cache_pct = (totals.cache_read / total_in * 100) if total_in > 0 else 0.0
         totals_table.add_row("Input (fresh)", f"{totals.input_tokens:,}")
-        totals_table.add_row("Cache read",    f"{totals.cache_read:,}  ({cache_pct:.0f}% hit)")
         totals_table.add_row("Cache write",   f"{totals.cache_create:,}")
+        totals_table.add_row("Cache read",    f"{totals.cache_read:,}  ({cache_pct:.0f}% hit)")
         totals_table.add_row("Output",        f"{totals.output:,}")
 
     def update(self, node) -> None:
@@ -352,14 +378,22 @@ class DetailPane(Widget):
         if isinstance(node, ProjectStats) and not node.loaded:
             load_project(node)
         self._hide_extras()
-        rows, totals = build_rows(node)
 
-        cat_table = self.query_one("#category-table", DataTable)
-        cat_table.clear()
-        for name, tokens, pct in rows:
-            cat_table.add_row(name, f"{tokens:,}", f"{pct:.1f}%")
+        times_widget = self.query_one("#session-times", Static)
+        if isinstance(node, SessionStats) and node.turns:
+            start = node.first_timestamp[:19].replace("T", " ") if node.first_timestamp else "?"
+            end = node.turns[-1].timestamp[:19].replace("T", " ") if node.turns[-1].timestamp else "?"
+            times_widget.update(f"Start: {start}   End: {end}")
+            times_widget.display = True
+        else:
+            times_widget.display = False
 
-        self._refresh_totals(totals)
+        if isinstance(node, TurnStats):
+            cat_totals = node.category_breakdown.category_totals()
+        else:
+            cat_totals = node.category_totals()
+        self._refresh_category_table(cat_totals)
+        self._refresh_totals(_get_totals(node))
 
         bar_rows = bar_rows_for(node)
         if bar_rows:
@@ -370,14 +404,12 @@ class DetailPane(Widget):
     def update_turn(self, turn: TurnStats) -> None:
         """Refresh for a TurnStats node — shows category breakdown and message preview."""
         self._hide_extras()
-        rows, totals = build_rows(turn)
-
-        cat_table = self.query_one("#category-table", DataTable)
-        cat_table.clear()
-        for name, tokens, pct in rows:
-            cat_table.add_row(name, f"{tokens:,}", f"{pct:.1f}%")
-
-        self._refresh_totals(totals)
+        path_widget = self.query_one("#turn-path", Static)
+        if turn.jsonl_path:
+            path_widget.update(turn.jsonl_path)
+            path_widget.display = True
+        self._refresh_category_table(turn.category_breakdown.category_totals())
+        self._refresh_totals(_get_totals(turn))
 
         # Show the human message, assistant response, and raw JSON
         msg_scroll = self.query_one("#message-section", VerticalScroll)
@@ -436,7 +468,13 @@ class DetailPane(Widget):
         rows = build_category_rows(turn, cat_name)
 
         cat_table = self.query_one("#category-table", DataTable)
-        cat_table.clear()
+        cat_table.clear(columns=True)
+        col_header = Text()
+        col_header.append("█ ", style=_CAT_STYLE.get(cat_name, "white"))
+        col_header.append(cat_name)
+        cat_table.add_column(col_header)
+        cat_table.add_column("Tokens")
+        cat_table.add_column("%")
         if not rows:
             cat_table.add_row(f"(no items in {cat_name})", "", "")
         else:
@@ -445,5 +483,4 @@ class DetailPane(Widget):
                 pct = (tokens / total * 100) if total > 0 else 0.0
                 cat_table.add_row(name, f"{tokens:,}", f"{pct:.1f}%")
 
-        _, totals = build_rows(turn)
-        self._refresh_totals(totals)
+        self._refresh_totals(_get_totals(turn))

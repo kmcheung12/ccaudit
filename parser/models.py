@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 
-CATEGORIES = ["Skills", "Memory", "System Prompt", "Tools", "Agents", "Messages"]
+CATEGORIES = ["Skills", "Memory", "Tools", "MCP", "Agents", "Messages", "Other"]
 
 
 @dataclass
@@ -17,18 +17,20 @@ class CategoryBreakdown:
     skills: list[CategoryItem] = field(default_factory=list)
     memory: list[CategoryItem] = field(default_factory=list)
     tools: list[CategoryItem] = field(default_factory=list)
+    mcp_tools: list[CategoryItem] = field(default_factory=list)
     agents: list[CategoryItem] = field(default_factory=list)
-    system_prompt_tokens: int = 0
     messages_tokens: int = 0
+    other_tokens: int = 0
 
     def category_totals(self) -> dict[str, int]:
         return {
-            "Skills": sum(i.tokens for i in self.skills),
-            "Memory": sum(i.tokens for i in self.memory),
-            "System Prompt": self.system_prompt_tokens,
-            "Tools": sum(i.tokens for i in self.tools),
-            "Agents": sum(i.tokens for i in self.agents),
+            "Skills":   sum(i.tokens for i in self.skills),
+            "Memory":   sum(i.tokens for i in self.memory),
+            "Tools":    sum(i.tokens for i in self.tools),
+            "MCP":      sum(i.tokens for i in self.mcp_tools),
+            "Agents":   sum(i.tokens for i in self.agents),
             "Messages": self.messages_tokens,
+            "Other":    self.other_tokens,
         }
 
     def total_attributed_tokens(self) -> int:
@@ -41,9 +43,10 @@ def _merge_breakdowns(breakdowns: list[CategoryBreakdown]) -> CategoryBreakdown:
         merged.skills.extend(bd.skills)
         merged.memory.extend(bd.memory)
         merged.tools.extend(bd.tools)
+        merged.mcp_tools.extend(bd.mcp_tools)
         merged.agents.extend(bd.agents)
-        merged.system_prompt_tokens += bd.system_prompt_tokens
         merged.messages_tokens += bd.messages_tokens
+        merged.other_tokens += bd.other_tokens
     return merged
 
 
@@ -57,12 +60,13 @@ class TurnStats:
     output_tokens: int
     category_breakdown: CategoryBreakdown
     after_compact: bool = False
-    user_text: str = ""       # human-typed portion of the user message
-    assistant_text: str = ""  # assistant's text response
-    files_read: list[str] = field(default_factory=list)  # file paths accessed via tools
-    tool_calls: list[tuple[str, dict]] = field(default_factory=list)  # (tool_name, input_dict)
-    raw_user: dict = field(default_factory=dict)      # raw JSONL user message
-    raw_assistant: dict = field(default_factory=dict) # raw JSONL assistant message
+    user_text: str = ""
+    assistant_text: str = ""
+    files_read: list[str] = field(default_factory=list)
+    tool_calls: list[tuple[str, dict]] = field(default_factory=list)
+    raw_user: dict = field(default_factory=dict)
+    raw_assistant: dict = field(default_factory=dict)
+    jsonl_path: str = ""
 
 
 @dataclass
