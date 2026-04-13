@@ -249,13 +249,18 @@ def load_session(jsonl_file: Path) -> SessionStats:
         total_input = 0
         total_cache_read = 0
         total_cache_create = 0
+        total_cache_create_5m = 0
+        total_cache_create_1h = 0
         total_output = 0
         for asst_msg in turn["assistant_msgs"]:
             usage = asst_msg.get("message", {}).get("usage", {})
-            total_input      += usage.get("input_tokens", 0)
-            total_cache_read += usage.get("cache_read_input_tokens", 0)
+            total_input        += usage.get("input_tokens", 0)
+            total_cache_read   += usage.get("cache_read_input_tokens", 0)
             total_cache_create += usage.get("cache_creation_input_tokens", 0)
-            total_output     += usage.get("output_tokens", 0)
+            total_output       += usage.get("output_tokens", 0)
+            cc = usage.get("cache_creation", {})
+            total_cache_create_5m += cc.get("ephemeral_5m_input_tokens", 0)
+            total_cache_create_1h += cc.get("ephemeral_1h_input_tokens", 0)
 
         fresh_tokens = total_input + total_cache_create
 
@@ -305,6 +310,8 @@ def load_session(jsonl_file: Path) -> SessionStats:
             cache_read_tokens=total_cache_read,
             cache_create_tokens=total_cache_create,
             output_tokens=total_output,
+            cache_create_5m_tokens=total_cache_create_5m,
+            cache_create_1h_tokens=total_cache_create_1h,
             category_breakdown=breakdown,
             after_compact=turn["after_compact"],
             user_text=human_text,
@@ -312,7 +319,7 @@ def load_session(jsonl_file: Path) -> SessionStats:
             files_read=files_read,
             tool_calls=tool_calls,
             raw_user=human_msg,
-            raw_assistant=final_msg,
+            raw_assistants=turn["assistant_msgs"],
             jsonl_path=str(jsonl_file),
         ))
 

@@ -138,5 +138,5 @@ def test_categorize_turn_mcp_attributed():
     mcp_total = sum(i.tokens for i in bd.mcp_tools)
     tools_total = sum(i.tokens for i in bd.tools)
     assert mcp_total > 0
-    assert tools_total > 0   # tool_result of MCP call → Tools
+    assert tools_total == 0  # tool_result of MCP call → MCP, not Tools
     assert sum(bd.category_totals().values()) == 1000

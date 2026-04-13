@@ -5,7 +5,7 @@ from parser.models import CategoryBreakdown, CategoryItem
 
 def _classify_text_block(text: str, is_last_text: bool) -> str:
     first_line = text.split("\n", 1)[0]
-    if first_line.startswith("Base directory:") and "/skills/" in first_line:
+    if first_line.startswith("Base directory") and "/skills/" in first_line:
         return "Skills"
     if first_line.strip() == "---" and "name:" in text:
         return "Memory"
@@ -32,7 +32,10 @@ def classify_user_blocks(content, tool_name_by_id: dict) -> dict:
             continue
         btype = block.get("type")
         if btype == "tool_result":
-            counts["Tools"] += len(_json.dumps(block.get("content", "")))
+            tool_use_id = block.get("tool_use_id", "")
+            tool_name = tool_name_by_id.get(tool_use_id, "")
+            cat = "MCP" if tool_name.startswith("mcp__") else "Tools"
+            counts[cat] += len(_json.dumps(block.get("content", "")))
         elif btype == "text":
             text = block.get("text", "")
             cat = _classify_text_block(text, i == last_text_idx)

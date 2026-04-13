@@ -194,6 +194,102 @@ def test_turn_with_one_tool_roundtrip():
     assert len(turns[0]["intermediate_pairs"]) == 1
     assert len(turns[0]["assistant_msgs"]) == 2
 
+def test_cache_create_5m_1h_parsed(tmp_path):
+    f = tmp_path / "cache_ttl.jsonl"
+    write_jsonl(f, [
+        {"type": "user", "message": {"content": "hi"}, "timestamp": "2026-01-01T00:00:00Z"},
+        {
+            "type": "assistant",
+            "message": {
+                "usage": {
+                    "input_tokens": 10,
+                    "cache_read_input_tokens": 0,
+                    "cache_creation_input_tokens": 9500,
+                    "cache_creation": {
+                        "ephemeral_5m_input_tokens": 1000,
+                        "ephemeral_1h_input_tokens": 8500,
+                    },
+                    "output_tokens": 5,
+                },
+            },
+            "timestamp": "2026-01-01T00:00:01Z",
+        },
+    ])
+    session = load_session(f)
+    turn = session.turns[0]
+    assert turn.cache_create_tokens == 9500
+    assert turn.cache_create_5m_tokens == 1000
+    assert turn.cache_create_1h_tokens == 8500
+    assert turn.cache_create_5m_tokens + turn.cache_create_1h_tokens == turn.cache_create_tokens
+
+
+def test_cache_create_5m_1h_missing_cache_creation_field(tmp_path):
+    """Older messages without the cache_creation sub-object default to zero."""
+    f = tmp_path / "no_cache_creation.jsonl"
+    write_jsonl(f, [
+        {"type": "user", "message": {"content": "hi"}, "timestamp": "2026-01-01T00:00:00Z"},
+        {
+            "type": "assistant",
+            "message": {
+                "usage": {
+                    "input_tokens": 10,
+                    "cache_read_input_tokens": 0,
+                    "cache_creation_input_tokens": 500,
+                    "output_tokens": 5,
+                },
+            },
+            "timestamp": "2026-01-01T00:00:01Z",
+        },
+    ])
+    session = load_session(f)
+    turn = session.turns[0]
+    assert turn.cache_create_tokens == 500
+    assert turn.cache_create_5m_tokens == 0
+    assert turn.cache_create_1h_tokens == 0
+
+
+def test_cache_create_5m_1h_summed_across_tool_roundtrips(tmp_path):
+    """5m/1h tokens accumulate across all assistant messages in a turn."""
+    f = tmp_path / "multi_asst.jsonl"
+    write_jsonl(f, [
+        {"type": "user", "message": {"content": "go"}, "timestamp": "2026-01-01T00:00:00Z"},
+        {
+            "type": "assistant",
+            "message": {
+                "content": [{"type": "tool_use", "id": "t1", "name": "Read", "input": {}}],
+                "usage": {
+                    "input_tokens": 5,
+                    "cache_read_input_tokens": 0,
+                    "cache_creation_input_tokens": 300,
+                    "cache_creation": {"ephemeral_5m_input_tokens": 100, "ephemeral_1h_input_tokens": 200},
+                    "output_tokens": 2,
+                },
+            },
+            "timestamp": "2026-01-01T00:00:01Z",
+        },
+        {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t1", "content": "data"}]}, "timestamp": "2026-01-01T00:00:02Z"},
+        {
+            "type": "assistant",
+            "message": {
+                "usage": {
+                    "input_tokens": 3,
+                    "cache_read_input_tokens": 0,
+                    "cache_creation_input_tokens": 700,
+                    "cache_creation": {"ephemeral_5m_input_tokens": 400, "ephemeral_1h_input_tokens": 300},
+                    "output_tokens": 4,
+                },
+            },
+            "timestamp": "2026-01-01T00:00:03Z",
+        },
+    ])
+    session = load_session(f)
+    assert len(session.turns) == 1
+    turn = session.turns[0]
+    assert turn.cache_create_5m_tokens == 500   # 100 + 400
+    assert turn.cache_create_1h_tokens == 500   # 200 + 300
+    assert turn.cache_create_tokens == 1000     # 300 + 700
+
+
 def test_two_human_turns():
     usage = {"input_tokens": 5, "cache_creation_input_tokens": 0,
              "cache_read_input_tokens": 0, "output_tokens": 2}

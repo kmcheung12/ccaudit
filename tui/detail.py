@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json
+import unicodedata
 from dataclasses import dataclass, field
 from parser.models import (
     CategoryBreakdown, CategoryItem, TurnStats, SessionStats, ProjectStats, GlobalStats, CATEGORIES,
@@ -17,6 +18,8 @@ class TokenTotals:
     input_tokens: int
     cache_read: int
     cache_create: int
+    cache_create_5m: int
+    cache_create_1h: int
     output: int
 
 
@@ -25,14 +28,16 @@ class BarRow:
     label: str
     data: object          # node data posted as NodeSelected on Enter
     category_totals: dict[str, int]
-    fresh_tokens: int     # input + cache_create
+    fresh_tokens: int     # input + cache_create (bar width basis)
     cache_tokens: int     # cache_read
     output_tokens: int = 0
+    input_tokens: int = 0
+    cache_create: int = 0
 
 
 # Category display colours (Rich style strings)
 _CAT_STYLE = {
-    "Messages": "bright_magenta",
+    "Messages": "orange1",
     "Skills":   "bright_yellow",
     "Memory":   "bright_green",
     "Tools":    "bright_blue",
@@ -49,12 +54,16 @@ def _get_totals(node) -> TokenTotals:
             input_tokens=node.input_tokens,
             cache_read=node.cache_read_tokens,
             cache_create=node.cache_create_tokens,
+            cache_create_5m=node.cache_create_5m_tokens,
+            cache_create_1h=node.cache_create_1h_tokens,
             output=node.output_tokens,
         )
     return TokenTotals(
         input_tokens=node.total_input_tokens,
         cache_read=node.total_cache_read_tokens,
         cache_create=node.total_cache_create_tokens,
+        cache_create_5m=node.total_cache_create_5m_tokens,
+        cache_create_1h=node.total_cache_create_1h_tokens,
         output=node.total_output_tokens,
     )
 
@@ -110,8 +119,6 @@ def build_chart_legend() -> Text:
         style = _CAT_STYLE.get(cat, "white")
         result.append("█", style=style)
         result.append(f" {cat}  ", style="dim")
-    result.append("░", style="dim")
-    result.append(" Cache read", style="dim")
     return result
 
 
@@ -130,6 +137,8 @@ def _session_bar_rows(node: GlobalStats) -> list[BarRow]:
             fresh_tokens=project.total_input_tokens + project.total_cache_create_tokens,
             cache_tokens=project.total_cache_read_tokens,
             output_tokens=project.total_output_tokens,
+            input_tokens=project.total_input_tokens,
+            cache_create=project.total_cache_create_tokens,
         ))
     return rows
 
@@ -145,6 +154,8 @@ def _session_bar_rows_for_project(node: ProjectStats) -> list[BarRow]:
             fresh_tokens=session.total_input_tokens + session.total_cache_create_tokens,
             cache_tokens=session.total_cache_read_tokens,
             output_tokens=session.total_output_tokens,
+            input_tokens=session.total_input_tokens,
+            cache_create=session.total_cache_create_tokens,
         ))
     return rows
 
@@ -161,6 +172,8 @@ def _turn_bar_rows(node: SessionStats) -> list[BarRow]:
             fresh_tokens=turn.input_tokens + turn.cache_create_tokens,
             cache_tokens=turn.cache_read_tokens,
             output_tokens=turn.output_tokens,
+            input_tokens=turn.input_tokens,
+            cache_create=turn.cache_create_tokens,
         ))
     return rows
 
@@ -175,30 +188,48 @@ def bar_rows_for(node) -> list[BarRow]:
     return []
 
 
+_LABEL_W = 14
+_NUM_W = 12
+
+
+def _display_width(s: str) -> int:
+    """Return the terminal display width of a string (wide chars count as 2)."""
+    return sum(2 if unicodedata.east_asian_width(ch) in ('W', 'F') else 1 for ch in s)
+
+
+def _ljust_display(s: str, width: int) -> str:
+    """Like str.ljust but pads to visual display width, not character count."""
+    return s + " " * max(0, width - _display_width(s))
+
+
 def build_chart_bars(rows: list[BarRow], bar_width: int = 28, cursor: int = -1) -> Text:
     """
-    Render a list of BarRows as a stacked bar chart.
-    Fresh tokens → coloured category segments (█).
-    Cache read   → dim░ segments.
-    The row at `cursor` is highlighted.
+    Render a list of BarRows as a stacked bar chart with columnar token counts.
+
+    Layout per row:
+        <label>  <category bar (fresh tokens only)>  Input  Write  Read  Out
     """
     if not rows:
         return Text("(no data)", style="dim")
 
-    max_total = max(r.fresh_tokens + r.cache_tokens for r in rows) or 1
+    max_fresh = max(r.fresh_tokens for r in rows) or 1
 
     result = Text()
+    # Header — leading "  " matches the per-row number prefix so columns align
+    result.append(" " * _LABEL_W + "  " + " " * bar_width)
+    result.append(
+        f"  {'Input':>{_NUM_W}}  {'Cache Write':>{_NUM_W}}  {'Cache Read':>{_NUM_W}}  {'Out':>{_NUM_W}}",
+        style="dim",
+    )
+
     for i, row in enumerate(rows):
-        if i > 0:
-            result.append("\n")
+        result.append("\n")
         row_start = len(result)
 
-        total = row.fresh_tokens + row.cache_tokens
-        fresh_chars = max(1, round((row.fresh_tokens / max_total) * bar_width))
-        cache_chars = round((row.cache_tokens / max_total) * bar_width)
-
+        fresh_chars = max(1, round((row.fresh_tokens / max_fresh) * bar_width))
         cat_totals = row.category_totals
         total_cat = sum(cat_totals.values()) or 1
+
         bar = Text()
         used = 0
         for cat in CATEGORIES:
@@ -212,14 +243,18 @@ def build_chart_bars(rows: list[BarRow], bar_width: int = 28, cursor: int = -1) 
                 used += chars
         if used < fresh_chars:
             bar.append("█" * (fresh_chars - used), style="dim")
-        if cache_chars > 0:
-            bar.append("░" * cache_chars, style="dim")
+        # Pad to uniform bar_width so number columns stay aligned
+        bar.append(" " * (bar_width - fresh_chars))
 
-        label = row.label[:14].ljust(14)
-        result.append(f"{label} {total:8,}  ")
+        label = _ljust_display(row.label[:_LABEL_W], _LABEL_W)
+        result.append(f"{label}  ")
         result.append_text(bar)
-        if row.output_tokens:
-            result.append(f"  →{row.output_tokens:,}")
+        result.append(
+            f"  {row.input_tokens:>{_NUM_W},}"
+            f"  {row.cache_create:>{_NUM_W},}"
+            f"  {row.cache_tokens:>{_NUM_W},}"
+            f"  {row.output_tokens:>{_NUM_W},}"
+        )
 
         if i == cursor:
             result.stylize("bold on dark_blue", row_start, len(result))
@@ -370,6 +405,8 @@ class DetailPane(Widget):
         cache_pct = (totals.cache_read / total_in * 100) if total_in > 0 else 0.0
         totals_table.add_row("Input (fresh)", f"{totals.input_tokens:,}")
         totals_table.add_row("Cache write",   f"{totals.cache_create:,}")
+        totals_table.add_row("  5 min",       f"{totals.cache_create_5m:,}")
+        totals_table.add_row("  1 hour",      f"{totals.cache_create_1h:,}")
         totals_table.add_row("Cache read",    f"{totals.cache_read:,}  ({cache_pct:.0f}% hit)")
         totals_table.add_row("Output",        f"{totals.output:,}")
 
@@ -448,17 +485,19 @@ class DetailPane(Widget):
                 content.append(f"  {path}\n", style="bright_blue")
 
         user_json = json.dumps(turn.raw_user, indent=2)
-        asst_json = json.dumps(turn.raw_assistant, indent=2)
+        asst_jsons = [json.dumps(m, indent=2) for m in turn.raw_assistants]
         user_words = len(user_json.split())
-        asst_words = len(asst_json.split())
+        asst_words = sum(len(j.split()) for j in asst_jsons)
         content.append("\n\nContent size (word count ≈ token proxy)\n", style="bold bright_white")
         content.append(f"  User message:      {user_words:,} words\n", style="dim")
-        content.append(f"  Assistant message: {asst_words:,} words\n", style="dim")
+        content.append(f"  Assistant messages ({len(asst_jsons)}): {asst_words:,} words\n", style="dim")
 
         content.append("\nRaw JSON — user message\n", style="bold bright_white")
         content.append(user_json, style="dim")
-        content.append("\n\nRaw JSON — assistant message\n", style="bold bright_white")
-        content.append(asst_json, style="dim")
+        for idx, asst_json in enumerate(asst_jsons, start=1):
+            label = f"\n\nRaw JSON — assistant message {idx}\n" if len(asst_jsons) > 1 else "\n\nRaw JSON — assistant message\n"
+            content.append(label, style="bold bright_white")
+            content.append(asst_json, style="dim")
 
         self.query_one("#message-body", Static).update(content)
 

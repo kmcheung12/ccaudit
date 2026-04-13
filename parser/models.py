@@ -60,12 +60,14 @@ class TurnStats:
     output_tokens: int
     category_breakdown: CategoryBreakdown
     after_compact: bool = False
+    cache_create_5m_tokens: int = 0
+    cache_create_1h_tokens: int = 0
     user_text: str = ""
     assistant_text: str = ""
     files_read: list[str] = field(default_factory=list)
     tool_calls: list[tuple[str, dict]] = field(default_factory=list)
     raw_user: dict = field(default_factory=dict)
-    raw_assistant: dict = field(default_factory=dict)
+    raw_assistants: list[dict] = field(default_factory=list)
     jsonl_path: str = ""
 
 
@@ -87,6 +89,14 @@ class SessionStats:
     @property
     def total_cache_create_tokens(self) -> int:
         return sum(t.cache_create_tokens for t in self.turns)
+
+    @property
+    def total_cache_create_5m_tokens(self) -> int:
+        return sum(t.cache_create_5m_tokens for t in self.turns)
+
+    @property
+    def total_cache_create_1h_tokens(self) -> int:
+        return sum(t.cache_create_1h_tokens for t in self.turns)
 
     @property
     def total_output_tokens(self) -> int:
@@ -118,6 +128,14 @@ class ProjectStats:
         return sum(s.total_cache_create_tokens for s in self.sessions)
 
     @property
+    def total_cache_create_5m_tokens(self) -> int:
+        return sum(s.total_cache_create_5m_tokens for s in self.sessions)
+
+    @property
+    def total_cache_create_1h_tokens(self) -> int:
+        return sum(s.total_cache_create_1h_tokens for s in self.sessions)
+
+    @property
     def total_output_tokens(self) -> int:
         return sum(s.total_output_tokens for s in self.sessions)
 
@@ -144,6 +162,14 @@ class GlobalStats:
     @property
     def total_cache_create_tokens(self) -> int:
         return sum(p.total_cache_create_tokens for p in self.projects)
+
+    @property
+    def total_cache_create_5m_tokens(self) -> int:
+        return sum(p.total_cache_create_5m_tokens for p in self.projects)
+
+    @property
+    def total_cache_create_1h_tokens(self) -> int:
+        return sum(p.total_cache_create_1h_tokens for p in self.projects)
 
     @property
     def total_output_tokens(self) -> int:
