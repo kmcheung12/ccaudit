@@ -115,9 +115,10 @@ def _group_turns(raw_messages: list[dict]) -> list[dict]:
     pending_human: dict | None = None
     pending_intermediates: list[tuple[dict, dict]] = []
     pending_assistant: dict | None = None
+    pending_after_compact: bool = False
 
     def _flush():
-        nonlocal pending_human, pending_intermediates, pending_assistant
+        nonlocal pending_human, pending_intermediates, pending_assistant, pending_after_compact
         if pending_human is not None and pending_assistant is not None:
             all_asst = [asst for asst, _ in pending_intermediates] + [pending_assistant]
             turns.append({
@@ -125,11 +126,12 @@ def _group_turns(raw_messages: list[dict]) -> list[dict]:
                 "intermediate_pairs": list(pending_intermediates),
                 "final_assistant_msg": pending_assistant,
                 "assistant_msgs":     all_asst,
-                "after_compact":      after_compact,
+                "after_compact":      pending_after_compact,
             })
         pending_human = None
         pending_intermediates = []
         pending_assistant = None
+        pending_after_compact = False
 
     for msg in raw_messages:
         msg_type = msg.get("type")
@@ -146,6 +148,8 @@ def _group_turns(raw_messages: list[dict]) -> list[dict]:
                 pending_human = msg
                 pending_intermediates = []
                 pending_assistant = None
+                pending_after_compact = after_compact
+                after_compact = False
             else:
                 # Tool-result message: pair with the last seen assistant
                 if pending_assistant is not None:
@@ -230,77 +234,87 @@ def load_session(jsonl_file: Path) -> SessionStats:
             except json.JSONDecodeError:
                 continue
 
-    # Determine positions after compact boundaries
-    compact_positions: set[int] = set()
-    in_compact = False
-    for i, msg in enumerate(raw_messages):
-        if msg.get("type") == "system" and msg.get("subtype") == "compact_boundary":
-            in_compact = True
-        if in_compact and msg.get("type") == "user":
-            compact_positions.add(i)
-            in_compact = False
-
-    # Build turns: pair each user message with the next assistant message
+    grouped = _group_turns(raw_messages)
     turns: list[TurnStats] = []
-    pending_user_text: str | None = None
-    pending_human_text: str = ""
-    pending_user_msg: dict = {}
-    after_compact = False
-    turn_number = 0
 
-    for i, msg in enumerate(raw_messages):
-        msg_type = msg.get("type")
+    for turn_number, turn in enumerate(grouped, start=1):
+        human_msg = turn["human_user_msg"]
+        final_msg = turn["final_assistant_msg"]
+        intermediate_pairs = turn["intermediate_pairs"]
 
-        if msg_type == "user":
-            content = msg.get("message", {}).get("content", "")
-            pending_user_text = _extract_text(content)
-            pending_human_text = _extract_human_text(content)
-            pending_user_msg = msg
-            after_compact = i in compact_positions
+        human_content = human_msg.get("message", {}).get("content", [])
+        final_content = final_msg.get("message", {}).get("content", [])
 
-        elif msg_type == "assistant":
-            usage = msg.get("message", {}).get("usage")
-            if not usage:
-                continue
+        # Sum fresh tokens across all assistant messages in this turn
+        total_input = 0
+        total_cache_read = 0
+        total_cache_create = 0
+        total_output = 0
+        for asst_msg in turn["assistant_msgs"]:
+            usage = asst_msg.get("message", {}).get("usage", {})
+            total_input      += usage.get("input_tokens", 0)
+            total_cache_read += usage.get("cache_read_input_tokens", 0)
+            total_cache_create += usage.get("cache_creation_input_tokens", 0)
+            total_output     += usage.get("output_tokens", 0)
 
-            input_tokens = usage.get("input_tokens", 0)
-            cache_read = usage.get("cache_read_input_tokens", 0)
-            cache_create = usage.get("cache_creation_input_tokens", 0)
-            output_tokens = usage.get("output_tokens", 0)
+        fresh_tokens = total_input + total_cache_create
 
-            text = pending_user_text or ""
-            breakdown = categorizer.categorize(
-                text=text,
-                input_tokens=input_tokens + cache_create,
+        # Prior assistant content (the message immediately before this turn's human message)
+        # is needed to resolve tool_result → tool_name mappings in the human message.
+        # _group_turns doesn't carry it, so we find it by walking raw_messages.
+        prior_assistant_content: list = []
+        human_msg_obj = human_msg.get("message", {})
+        for raw in raw_messages:
+            if raw is human_msg:
+                break
+            if raw.get("type") == "assistant" and raw.get("message", {}).get("usage"):
+                prior_assistant_content = raw.get("message", {}).get("content", [])
+
+        # Intermediate pairs: strip wrapper dicts to just content lists
+        content_pairs = [
+            (
+                asst.get("message", {}).get("content", []),
+                tr.get("message", {}).get("content", []),
             )
+            for asst, tr in intermediate_pairs
+        ]
 
-            assistant_content = msg.get("message", {}).get("content", "")
-            assistant_text = _extract_assistant_text(assistant_content)
-            files_read, tool_calls = _extract_tool_calls(assistant_content)
+        breakdown = categorizer.categorize_turn(
+            human_content=human_content,
+            intermediate_pairs=content_pairs,
+            prior_assistant_content=prior_assistant_content,
+            fresh_tokens=fresh_tokens,
+        )
 
-            turn_number += 1
-            turns.append(TurnStats(
-                turn_number=turn_number,
-                timestamp=msg.get("timestamp", ""),
-                input_tokens=input_tokens,
-                cache_read_tokens=cache_read,
-                cache_create_tokens=cache_create,
-                output_tokens=output_tokens,
-                category_breakdown=breakdown,
-                after_compact=after_compact,
-                user_text=pending_human_text,
-                assistant_text=assistant_text,
-                files_read=files_read,
-                tool_calls=tool_calls,
-                raw_user=pending_user_msg,
-                raw_assistant=msg,
-                jsonl_path=str(jsonl_file),
-            ))
-            pending_user_text = None
-            pending_human_text = ""
-            pending_user_msg = {}
-            after_compact = False
-            is_first_turn = False
+        # Tool calls and files_read come from all assistant messages in the turn
+        files_read: list[str] = []
+        tool_calls: list[tuple[str, dict]] = []
+        for asst_msg in turn["assistant_msgs"]:
+            asst_content = asst_msg.get("message", {}).get("content", [])
+            f, c = _extract_tool_calls(asst_content)
+            files_read.extend(f)
+            tool_calls.extend(c)
+
+        assistant_text = _extract_assistant_text(final_content)
+        human_text = _extract_human_text(human_content)
+
+        turns.append(TurnStats(
+            turn_number=turn_number,
+            timestamp=final_msg.get("timestamp", ""),
+            input_tokens=total_input,
+            cache_read_tokens=total_cache_read,
+            cache_create_tokens=total_cache_create,
+            output_tokens=total_output,
+            category_breakdown=breakdown,
+            after_compact=turn["after_compact"],
+            user_text=human_text,
+            assistant_text=assistant_text,
+            files_read=files_read,
+            tool_calls=tool_calls,
+            raw_user=human_msg,
+            raw_assistant=final_msg,
+            jsonl_path=str(jsonl_file),
+        ))
 
     first_timestamp = None
     for msg in raw_messages:
