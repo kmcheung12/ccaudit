@@ -48,8 +48,8 @@ def _merge_breakdowns(breakdowns: list[CategoryBreakdown]) -> CategoryBreakdown:
 
 
 @dataclass
-class TurnStats:
-    turn_number: int
+class ExchangeStats:
+    exchange_number: int
     timestamp: str
     input_tokens: int
     cache_read_tokens: int
@@ -73,34 +73,34 @@ class SessionStats:
     session_id: str
     display_name: str
     first_timestamp: Optional[str]
-    turns: list[TurnStats] = field(default_factory=list)
+    exchanges: list[ExchangeStats] = field(default_factory=list)
 
     @property
     def total_input_tokens(self) -> int:
-        return sum(t.input_tokens for t in self.turns)
+        return sum(t.input_tokens for t in self.exchanges)
 
     @property
     def total_cache_read_tokens(self) -> int:
-        return sum(t.cache_read_tokens for t in self.turns)
+        return sum(t.cache_read_tokens for t in self.exchanges)
 
     @property
     def total_cache_create_tokens(self) -> int:
-        return sum(t.cache_create_tokens for t in self.turns)
+        return sum(t.cache_create_tokens for t in self.exchanges)
 
     @property
     def total_cache_create_5m_tokens(self) -> int:
-        return sum(t.cache_create_5m_tokens for t in self.turns)
+        return sum(t.cache_create_5m_tokens for t in self.exchanges)
 
     @property
     def total_cache_create_1h_tokens(self) -> int:
-        return sum(t.cache_create_1h_tokens for t in self.turns)
+        return sum(t.cache_create_1h_tokens for t in self.exchanges)
 
     @property
     def total_output_tokens(self) -> int:
-        return sum(t.output_tokens for t in self.turns)
+        return sum(t.output_tokens for t in self.exchanges)
 
     def category_totals(self) -> dict[str, int]:
-        merged = _merge_breakdowns([t.category_breakdown for t in self.turns])
+        merged = _merge_breakdowns([t.category_breakdown for t in self.exchanges])
         return merged.category_totals()
 
 
@@ -111,6 +111,7 @@ class ProjectStats:
     sessions: list[SessionStats] = field(default_factory=list)
     loaded: bool = False
     load_error: Optional[str] = None
+    projects_dir: Optional[str] = None  # override for projects outside PROJECTS_DIR
 
     @property
     def total_input_tokens(self) -> int:
@@ -138,7 +139,7 @@ class ProjectStats:
 
     def category_totals(self) -> dict[str, int]:
         merged = _merge_breakdowns(
-            [_merge_breakdowns([t.category_breakdown for t in s.turns])
+            [_merge_breakdowns([t.category_breakdown for t in s.exchanges])
              for s in self.sessions]
         )
         return merged.category_totals()
@@ -176,6 +177,6 @@ class GlobalStats:
         all_breakdowns = []
         for p in self.projects:
             for s in p.sessions:
-                for t in s.turns:
+                for t in s.exchanges:
                     all_breakdowns.append(t.category_breakdown)
         return _merge_breakdowns(all_breakdowns).category_totals()

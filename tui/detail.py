@@ -3,7 +3,7 @@ import json
 import unicodedata
 from dataclasses import dataclass, field
 from parser.models import (
-    CategoryBreakdown, CategoryItem, TurnStats, SessionStats, ProjectStats, GlobalStats, CATEGORIES,
+    CategoryBreakdown, CategoryItem, ExchangeStats, SessionStats, ProjectStats, GlobalStats, CATEGORIES,
 )
 from parser.loader import load_project
 from textual.widgets import DataTable, Static
@@ -48,7 +48,7 @@ _CAT_STYLE = {
 
 def _get_totals(node) -> TokenTotals:
     """Extract raw token totals from any stats node."""
-    if isinstance(node, TurnStats):
+    if isinstance(node, ExchangeStats):
         return TokenTotals(
             input_tokens=node.input_tokens,
             cache_read=node.cache_read_tokens,
@@ -75,7 +75,7 @@ def build_rows(node) -> tuple[list[tuple[str, int, float]], TokenTotals]:
         rows: list of (category_name, tokens, percentage) sorted by tokens descending
         totals: TokenTotals with raw cache/output breakdown
     """
-    if isinstance(node, TurnStats):
+    if isinstance(node, ExchangeStats):
         cat_totals = node.category_breakdown.category_totals()
     else:
         cat_totals = node.category_totals()
@@ -93,12 +93,12 @@ def build_rows(node) -> tuple[list[tuple[str, int, float]], TokenTotals]:
     return rows, _get_totals(node)
 
 
-def build_category_rows(turn: TurnStats, cat_name: str) -> list[tuple[str, int]]:
+def build_category_rows(exchange: ExchangeStats, cat_name: str) -> list[tuple[str, int]]:
     """
-    Return individual items within a category for a turn.
+    Return individual items within a category for an exchange.
     Returns list of (item_name, tokens) sorted by tokens descending.
     """
-    bd = turn.category_breakdown
+    bd = exchange.category_breakdown
     mapping = {
         "Skills": bd.skills,
         "Tools": bd.tools,
@@ -158,20 +158,20 @@ def _session_bar_rows_for_project(node: ProjectStats) -> list[BarRow]:
     return rows
 
 
-def _turn_bar_rows(node: SessionStats) -> list[BarRow]:
-    """One bar per turn."""
+def _exchange_bar_rows(node: SessionStats) -> list[BarRow]:
+    """One bar per exchange."""
     rows = []
-    for turn in node.turns:
-        prefix = "⚡" if turn.after_compact else " "
+    for exchange in node.exchanges:
+        prefix = "⚡" if exchange.after_compact else " "
         rows.append(BarRow(
-            label=f"{prefix}T{turn.turn_number:2d}",
-            data=turn,
-            category_totals=turn.category_breakdown.category_totals(),
-            fresh_tokens=turn.input_tokens + turn.cache_create_tokens,
-            cache_tokens=turn.cache_read_tokens,
-            output_tokens=turn.output_tokens,
-            input_tokens=turn.input_tokens,
-            cache_create=turn.cache_create_tokens,
+            label=f"{prefix}E{exchange.exchange_number:2d}",
+            data=exchange,
+            category_totals=exchange.category_breakdown.category_totals(),
+            fresh_tokens=exchange.input_tokens + exchange.cache_create_tokens,
+            cache_tokens=exchange.cache_read_tokens,
+            output_tokens=exchange.output_tokens,
+            input_tokens=exchange.input_tokens,
+            cache_create=exchange.cache_create_tokens,
         ))
     return rows
 
@@ -182,7 +182,7 @@ def bar_rows_for(node) -> list[BarRow]:
     if isinstance(node, ProjectStats):
         return _session_bar_rows_for_project(node)
     if isinstance(node, SessionStats):
-        return _turn_bar_rows(node)
+        return _exchange_bar_rows(node)
     return []
 
 
@@ -234,7 +234,7 @@ def build_chart_bars(rows: list[BarRow], bar_width: int = 28, cursor: int = -1) 
             tokens = cat_totals.get(cat, 0)
             if tokens == 0:
                 continue
-            chars = round((tokens / total_cat) * fresh_chars)
+            chars = max(1, round((tokens / total_cat) * fresh_chars))
             chars = min(chars, fresh_chars - used)
             if chars > 0:
                 bar.append("█" * chars, style=_CAT_STYLE.get(cat, "white"))
@@ -415,15 +415,15 @@ class DetailPane(Widget):
         self._hide_extras()
 
         times_widget = self.query_one("#session-times", Static)
-        if isinstance(node, SessionStats) and node.turns:
+        if isinstance(node, SessionStats) and node.exchanges:
             start = node.first_timestamp[:19].replace("T", " ") if node.first_timestamp else "?"
-            end = node.turns[-1].timestamp[:19].replace("T", " ") if node.turns[-1].timestamp else "?"
+            end = node.exchanges[-1].timestamp[:19].replace("T", " ") if node.exchanges[-1].timestamp else "?"
             times_widget.update(f"Start: {start}   End: {end}")
             times_widget.display = True
         else:
             times_widget.display = False
 
-        if isinstance(node, TurnStats):
+        if isinstance(node, ExchangeStats):
             cat_totals = node.category_breakdown.category_totals()
         else:
             cat_totals = node.category_totals()
@@ -436,15 +436,15 @@ class DetailPane(Widget):
             self.query_one("#chart-legend", Static).update(build_chart_legend())
             self.query_one("#chart-bars", BarChart).set_rows(bar_rows)
 
-    def update_turn(self, turn: TurnStats) -> None:
-        """Refresh for a TurnStats node — shows category breakdown and message preview."""
+    def update_exchange(self, exchange: ExchangeStats) -> None:
+        """Refresh for an ExchangeStats node — shows category breakdown and message preview."""
         self._hide_extras()
         path_widget = self.query_one("#turn-path", Static)
-        if turn.jsonl_path:
-            path_widget.update(turn.jsonl_path)
+        if exchange.jsonl_path:
+            path_widget.update(exchange.jsonl_path)
             path_widget.display = True
-        self._refresh_category_table(turn.category_breakdown.category_totals())
-        self._refresh_totals(_get_totals(turn))
+        self._refresh_category_table(exchange.category_breakdown.category_totals())
+        self._refresh_totals(_get_totals(exchange))
 
         # Show the human message, assistant response, and raw JSON
         msg_scroll = self.query_one("#message-section", VerticalScroll)
@@ -454,20 +454,20 @@ class DetailPane(Widget):
         content = Text()
 
         content.append("User\n", style="bold bright_white")
-        if turn.user_text:
-            content.append(turn.user_text, style="dim")
+        if exchange.user_text:
+            content.append(exchange.user_text, style="dim")
         else:
-            content.append("(tool result — output tokens from previous turn's tool calls)", style="dim italic")
+            content.append("(tool result — output tokens from previous exchange's tool calls)", style="dim italic")
 
         content.append("\n\nAssistant\n", style="bold bright_white")
-        if turn.assistant_text:
-            content.append(turn.assistant_text, style="dim")
+        if exchange.assistant_text:
+            content.append(exchange.assistant_text, style="dim")
         else:
             content.append("(no text — assistant made tool calls only)", style="dim italic")
 
-        if turn.tool_calls:
+        if exchange.tool_calls:
             content.append("\n\nTool calls\n", style="bold bright_white")
-            for name, inp in turn.tool_calls:
+            for name, inp in exchange.tool_calls:
                 content.append(f"  {name}\n", style="bright_yellow")
                 for key, val in inp.items():
                     val_str = str(val) if not isinstance(val, str) else val
@@ -477,13 +477,13 @@ class DetailPane(Widget):
                     content.append(f"    {key}: ", style="dim")
                     content.append(f"{val_str}\n", style="white")
 
-        if turn.files_read:
+        if exchange.files_read:
             content.append("\nFiles read\n", style="bold bright_white")
-            for path in turn.files_read:
+            for path in exchange.files_read:
                 content.append(f"  {path}\n", style="bright_blue")
 
-        user_json = json.dumps(turn.raw_user, indent=2)
-        asst_jsons = [json.dumps(m, indent=2) for m in turn.raw_assistants]
+        user_json = json.dumps(exchange.raw_user, indent=2)
+        asst_jsons = [json.dumps(m, indent=2) for m in exchange.raw_assistants]
         user_words = len(user_json.split())
         asst_words = sum(len(j.split()) for j in asst_jsons)
         content.append("\n\nContent size (word count ≈ token proxy)\n", style="bold bright_white")
@@ -499,10 +499,10 @@ class DetailPane(Widget):
 
         self.query_one("#message-body", Static).update(content)
 
-    def update_category(self, turn: TurnStats, cat_name: str) -> None:
-        """Show individual items within a category for a turn."""
+    def update_category(self, exchange: ExchangeStats, cat_name: str) -> None:
+        """Show individual items within a category for an exchange."""
         self._hide_extras()
-        rows = build_category_rows(turn, cat_name)
+        rows = build_category_rows(exchange, cat_name)
 
         cat_table = self.query_one("#category-table", DataTable)
         cat_table.clear(columns=True)
@@ -520,4 +520,4 @@ class DetailPane(Widget):
                 pct = (tokens / total * 100) if total > 0 else 0.0
                 cat_table.add_row(name, f"{tokens:,}", f"{pct:.1f}%")
 
-        self._refresh_totals(_get_totals(turn))
+        self._refresh_totals(_get_totals(exchange))

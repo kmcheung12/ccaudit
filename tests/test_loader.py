@@ -30,17 +30,17 @@ def test_load_session_empty_file(tmp_path):
     f.write_text("")
     session = load_session(f)
     assert session.session_id == "abc123"
-    assert session.turns == []
+    assert session.exchanges == []
 
 
 def test_load_session_skips_malformed_lines(tmp_path):
     f = tmp_path / "abc123.jsonl"
     f.write_text("not json\n{also bad\n")
     session = load_session(f)
-    assert session.turns == []
+    assert session.exchanges == []
 
 
-def test_load_session_extracts_turns(tmp_path):
+def test_load_session_extracts_exchanges(tmp_path):
     f = tmp_path / "sess1.jsonl"
     write_jsonl(f, [
         {
@@ -63,13 +63,13 @@ def test_load_session_extracts_turns(tmp_path):
         },
     ])
     session = load_session(f)
-    assert len(session.turns) == 1
-    turn = session.turns[0]
-    assert turn.input_tokens == 5
-    assert turn.cache_read_tokens == 9550
-    assert turn.cache_create_tokens == 100
-    assert turn.output_tokens == 20
-    assert turn.turn_number == 1
+    assert len(session.exchanges) == 1
+    exchange = session.exchanges[0]
+    assert exchange.input_tokens == 5
+    assert exchange.cache_read_tokens == 9550
+    assert exchange.cache_create_tokens == 100
+    assert exchange.output_tokens == 20
+    assert exchange.exchange_number == 1
 
 
 def test_load_session_display_name(tmp_path):
@@ -79,7 +79,7 @@ def test_load_session_display_name(tmp_path):
     assert session.display_name == "4b177c76"
 
 
-def test_load_session_multiple_turns(tmp_path):
+def test_load_session_multiple_exchanges(tmp_path):
     f = tmp_path / "multi.jsonl"
     write_jsonl(f, [
         {"type": "user", "message": {"content": "msg1"}, "timestamp": "2026-01-01T00:00:00Z"},
@@ -88,9 +88,9 @@ def test_load_session_multiple_turns(tmp_path):
         {"type": "assistant", "message": {"usage": {"input_tokens": 8, "cache_read_input_tokens": 200, "cache_creation_input_tokens": 30, "output_tokens": 12}}, "timestamp": "2026-01-01T00:00:03Z"},
     ])
     session = load_session(f)
-    assert len(session.turns) == 2
-    assert session.turns[0].turn_number == 1
-    assert session.turns[1].turn_number == 2
+    assert len(session.exchanges) == 2
+    assert session.exchanges[0].exchange_number == 1
+    assert session.exchanges[1].exchange_number == 2
 
 
 def test_load_session_marks_after_compact(tmp_path):
@@ -103,9 +103,9 @@ def test_load_session_marks_after_compact(tmp_path):
         {"type": "assistant", "message": {"usage": {"input_tokens": 3, "cache_read_input_tokens": 200, "cache_creation_input_tokens": 20, "output_tokens": 10}}, "timestamp": "2026-01-01T00:00:04Z"},
     ])
     session = load_session(f)
-    assert len(session.turns) == 2
-    assert not session.turns[0].after_compact
-    assert session.turns[1].after_compact
+    assert len(session.exchanges) == 2
+    assert not session.exchanges[0].after_compact
+    assert session.exchanges[1].after_compact
 
 
 def test_load_session_skips_assistant_without_usage(tmp_path):
@@ -115,7 +115,7 @@ def test_load_session_skips_assistant_without_usage(tmp_path):
         {"type": "assistant", "message": {"role": "assistant"}, "timestamp": "2026-01-01T00:00:01Z"},
     ])
     session = load_session(f)
-    assert session.turns == []
+    assert session.exchanges == []
 
 
 # list_projects
@@ -156,9 +156,9 @@ def test_empty_content_is_not_human():
     assert _is_human_user_message([]) is False
 
 
-# _group_turns
+# _group_exchanges
 
-from parser.loader import _group_turns
+from parser.loader import _group_exchanges
 
 def _msg(type_, role=None, content=None, usage=None):
     m = {"type": type_}
@@ -166,19 +166,19 @@ def _msg(type_, role=None, content=None, usage=None):
         m["message"] = {"role": role, "content": content or [], "usage": usage}
     return m
 
-def test_single_turn_no_tools():
+def test_single_exchange_no_tools():
     msgs = [
         _msg("user",      "user",      [{"type": "text", "text": "hi"}]),
         _msg("assistant", "assistant", [{"type": "text", "text": "hello"}],
              usage={"input_tokens": 10, "cache_creation_input_tokens": 0,
                     "cache_read_input_tokens": 0, "output_tokens": 5}),
     ]
-    turns = _group_turns(msgs)
-    assert len(turns) == 1
-    assert len(turns[0]["assistant_msgs"]) == 1
-    assert len(turns[0]["intermediate_pairs"]) == 0
+    exchanges = _group_exchanges(msgs)
+    assert len(exchanges) == 1
+    assert len(exchanges[0]["assistant_msgs"]) == 1
+    assert len(exchanges[0]["intermediate_pairs"]) == 0
 
-def test_turn_with_one_tool_roundtrip():
+def test_exchange_with_one_tool_roundtrip():
     msgs = [
         _msg("user",      "user",      [{"type": "text", "text": "hi"}]),
         _msg("assistant", "assistant", [{"type": "tool_use", "id": "t1", "name": "Read", "input": {}}],
@@ -189,10 +189,10 @@ def test_turn_with_one_tool_roundtrip():
              usage={"input_tokens": 1, "cache_creation_input_tokens": 20,
                     "cache_read_input_tokens": 50, "output_tokens": 4}),
     ]
-    turns = _group_turns(msgs)
-    assert len(turns) == 1
-    assert len(turns[0]["intermediate_pairs"]) == 1
-    assert len(turns[0]["assistant_msgs"]) == 2
+    exchanges = _group_exchanges(msgs)
+    assert len(exchanges) == 1
+    assert len(exchanges[0]["intermediate_pairs"]) == 1
+    assert len(exchanges[0]["assistant_msgs"]) == 2
 
 def test_cache_create_5m_1h_parsed(tmp_path):
     f = tmp_path / "cache_ttl.jsonl"
@@ -216,11 +216,11 @@ def test_cache_create_5m_1h_parsed(tmp_path):
         },
     ])
     session = load_session(f)
-    turn = session.turns[0]
-    assert turn.cache_create_tokens == 9500
-    assert turn.cache_create_5m_tokens == 1000
-    assert turn.cache_create_1h_tokens == 8500
-    assert turn.cache_create_5m_tokens + turn.cache_create_1h_tokens == turn.cache_create_tokens
+    exchange = session.exchanges[0]
+    assert exchange.cache_create_tokens == 9500
+    assert exchange.cache_create_5m_tokens == 1000
+    assert exchange.cache_create_1h_tokens == 8500
+    assert exchange.cache_create_5m_tokens + exchange.cache_create_1h_tokens == exchange.cache_create_tokens
 
 
 def test_cache_create_5m_1h_missing_cache_creation_field(tmp_path):
@@ -242,10 +242,10 @@ def test_cache_create_5m_1h_missing_cache_creation_field(tmp_path):
         },
     ])
     session = load_session(f)
-    turn = session.turns[0]
-    assert turn.cache_create_tokens == 500
-    assert turn.cache_create_5m_tokens == 0
-    assert turn.cache_create_1h_tokens == 0
+    exchange = session.exchanges[0]
+    assert exchange.cache_create_tokens == 500
+    assert exchange.cache_create_5m_tokens == 0
+    assert exchange.cache_create_1h_tokens == 0
 
 
 def test_cache_create_5m_1h_summed_across_tool_roundtrips(tmp_path):
@@ -283,14 +283,14 @@ def test_cache_create_5m_1h_summed_across_tool_roundtrips(tmp_path):
         },
     ])
     session = load_session(f)
-    assert len(session.turns) == 1
-    turn = session.turns[0]
-    assert turn.cache_create_5m_tokens == 500   # 100 + 400
-    assert turn.cache_create_1h_tokens == 500   # 200 + 300
-    assert turn.cache_create_tokens == 1000     # 300 + 700
+    assert len(session.exchanges) == 1
+    exchange = session.exchanges[0]
+    assert exchange.cache_create_5m_tokens == 500   # 100 + 400
+    assert exchange.cache_create_1h_tokens == 500   # 200 + 300
+    assert exchange.cache_create_tokens == 1000     # 300 + 700
 
 
-def test_two_human_turns():
+def test_two_human_exchanges():
     usage = {"input_tokens": 5, "cache_creation_input_tokens": 0,
              "cache_read_input_tokens": 0, "output_tokens": 2}
     msgs = [
@@ -299,5 +299,5 @@ def test_two_human_turns():
         _msg("user",      "user",      [{"type": "text", "text": "second"}]),
         _msg("assistant", "assistant", [{"type": "text", "text": "reply2"}], usage=usage),
     ]
-    turns = _group_turns(msgs)
-    assert len(turns) == 2
+    exchanges = _group_exchanges(msgs)
+    assert len(exchanges) == 2

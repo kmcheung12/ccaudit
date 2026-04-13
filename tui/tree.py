@@ -5,7 +5,7 @@ from textual.widgets.tree import TreeNode
 from textual.widget import Widget
 from textual.message import Message
 from textual.binding import Binding
-from parser.models import GlobalStats, ProjectStats, TurnStats
+from parser.models import GlobalStats, ProjectStats, ExchangeStats
 from parser.loader import load_project
 
 
@@ -74,20 +74,20 @@ class StatsTree(Widget):
             return
         for session in project.sessions:
             label = f"🗂 {session.display_name}"
-            if not session.turns:
+            if not session.exchanges:
                 label += " (empty)"
             s_node = node.add(label, data=session, expand=False)
             if session.first_timestamp:
                 s_node.tooltip = session.first_timestamp[:19].replace("T", " ")
-            for turn in session.turns:
-                prefix = "⚡" if turn.after_compact else "↩"
+            for exchange in session.exchanges:
+                prefix = "⚡" if exchange.after_compact else "↩"
                 t_node = s_node.add(
-                    f"{prefix} turn {turn.turn_number}", data=turn, expand=False
+                    f"{prefix} exchange {exchange.exchange_number}", data=exchange, expand=False
                 )
-                for cat_name, tokens in turn.category_breakdown.category_totals().items():
+                for cat_name, tokens in exchange.category_breakdown.category_totals().items():
                     if tokens == 0:
                         continue
-                    t_node.add_leaf(f"  {cat_name}: {tokens:,}", data=(turn, cat_name))
+                    t_node.add_leaf(f"  {cat_name}: {tokens:,}", data=(exchange, cat_name))
 
     def _populate_project_node(self, node: TreeNode, project: ProjectStats) -> None:
         """Load project from disk and populate node."""

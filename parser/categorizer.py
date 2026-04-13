@@ -66,7 +66,7 @@ def classify_assistant_blocks(content) -> dict:
     return counts
 
 
-def categorize_turn(human_content, intermediate_pairs, prior_assistant_content, fresh_tokens: int) -> CategoryBreakdown:
+def categorize_exchange(human_content, intermediate_pairs, prior_assistant_content, fresh_tokens: int) -> CategoryBreakdown:
     tool_name_by_id: dict = {}
     if isinstance(prior_assistant_content, list):
         for block in prior_assistant_content:

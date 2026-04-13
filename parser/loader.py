@@ -1,7 +1,7 @@
 from __future__ import annotations
 import json
 from pathlib import Path
-from parser.models import ProjectStats, SessionStats, TurnStats, CategoryBreakdown
+from parser.models import ProjectStats, SessionStats, ExchangeStats, CategoryBreakdown
 from parser import categorizer
 
 PROJECTS_DIR = Path.home() / ".claude" / "projects"
@@ -16,7 +16,7 @@ def slug_to_display(slug: str) -> str:
 
 
 def list_projects(projects_dir: Path = PROJECTS_DIR) -> list[ProjectStats]:
-    """Return unloaded ProjectStats for each subdirectory."""
+    """Return unloaded ProjectStats for each subdirectory of projects_dir."""
     if not projects_dir.exists():
         return []
     projects = []
@@ -29,10 +29,19 @@ def list_projects(projects_dir: Path = PROJECTS_DIR) -> list[ProjectStats]:
     return projects
 
 
+def path_to_slug(project_dir: Path) -> str:
+    """Convert an absolute path to its Claude project slug.
+
+    E.g. /Users/alan/code/ccaudit → -Users-alan-code-ccaudit
+    """
+    return project_dir.as_posix().replace("/", "-")
+
+
 def load_project(project: ProjectStats, projects_dir: Path = PROJECTS_DIR) -> None:
     """Load all sessions for a project in-place. Sets project.loaded = True."""
     try:
-        project_dir = projects_dir / project.project_slug
+        base = Path(project.projects_dir) if project.projects_dir else projects_dir
+        project_dir = base / project.project_slug
         for jsonl_file in sorted(project_dir.glob("*.jsonl")):
             project.sessions.append(load_session(jsonl_file))
         project.loaded = True
@@ -85,7 +94,7 @@ def _extract_human_text(content) -> str:
 
 
 def _is_human_user_message(content) -> bool:
-    """Return True if this user message contains a human-typed turn (not purely tool results)."""
+    """Return True if this user message contains a human-typed exchange (not purely tool results)."""
     if isinstance(content, str):
         return bool(content.strip())
     if not isinstance(content, list) or not content:
@@ -97,20 +106,20 @@ def _is_human_user_message(content) -> bool:
     )
 
 
-def _group_turns(raw_messages: list[dict]) -> list[dict]:
+def _group_exchanges(raw_messages: list[dict]) -> list[dict]:
     """
-    Group raw JSONL messages into logical turns.
+    Group raw JSONL messages into logical exchanges.
 
-    Each turn dict has keys:
+    Each exchange dict has keys:
         human_user_msg      — the opening human user message
         intermediate_pairs  — list of (assistant_msg, tool_result_user_msg) for each tool round-trip
         final_assistant_msg — the closing assistant message (has usage)
-        assistant_msgs      — all assistant messages in this turn (intermediates + final)
+        assistant_msgs      — all assistant messages in this exchange (intermediates + final)
         after_compact       — bool
 
     Assistant messages without usage are skipped (streaming artifacts).
     """
-    turns = []
+    exchanges = []
     after_compact = False
     pending_human: dict | None = None
     pending_intermediates: list[tuple[dict, dict]] = []
@@ -121,7 +130,7 @@ def _group_turns(raw_messages: list[dict]) -> list[dict]:
         nonlocal pending_human, pending_intermediates, pending_assistant, pending_after_compact
         if pending_human is not None and pending_assistant is not None:
             all_asst = [asst for asst, _ in pending_intermediates] + [pending_assistant]
-            turns.append({
+            exchanges.append({
                 "human_user_msg":     pending_human,
                 "intermediate_pairs": list(pending_intermediates),
                 "final_assistant_msg": pending_assistant,
@@ -143,7 +152,7 @@ def _group_turns(raw_messages: list[dict]) -> list[dict]:
         if msg_type == "user":
             content = msg.get("message", {}).get("content", [])
             if _is_human_user_message(content):
-                # New human turn — flush any completed prior turn first
+                # New exchange — flush any completed prior exchange first
                 _flush()
                 pending_human = msg
                 pending_intermediates = []
@@ -164,9 +173,9 @@ def _group_turns(raw_messages: list[dict]) -> list[dict]:
                 continue  # assistant before any human message
             pending_assistant = msg
 
-    # Flush the final open turn
+    # Flush the final open exchange
     _flush()
-    return turns
+    return exchanges
 
 
 def _extract_tool_calls(content) -> tuple[list[str], list[tuple[str, dict]]]:
@@ -234,10 +243,10 @@ def load_session(jsonl_file: Path) -> SessionStats:
             except json.JSONDecodeError:
                 continue
 
-    grouped = _group_turns(raw_messages)
-    turns: list[TurnStats] = []
+    grouped = _group_exchanges(raw_messages)
+    exchanges: list[ExchangeStats] = []
 
-    for turn_number, turn in enumerate(grouped, start=1):
+    for exchange_number, turn in enumerate(grouped, start=1):
         human_msg = turn["human_user_msg"]
         final_msg = turn["final_assistant_msg"]
         intermediate_pairs = turn["intermediate_pairs"]
@@ -245,7 +254,7 @@ def load_session(jsonl_file: Path) -> SessionStats:
         human_content = human_msg.get("message", {}).get("content", [])
         final_content = final_msg.get("message", {}).get("content", [])
 
-        # Sum fresh tokens across all assistant messages in this turn
+        # Sum fresh tokens across all assistant messages in this exchange
         total_input = 0
         total_cache_read = 0
         total_cache_create = 0
@@ -266,7 +275,7 @@ def load_session(jsonl_file: Path) -> SessionStats:
 
         # Prior assistant content (the message immediately before this turn's human message)
         # is needed to resolve tool_result → tool_name mappings in the human message.
-        # _group_turns doesn't carry it, so we find it by walking raw_messages.
+        # _group_exchanges doesn't carry it, so we find it by walking raw_messages.
         prior_assistant_content: list = []
         human_msg_obj = human_msg.get("message", {})
         for raw in raw_messages:
@@ -284,14 +293,14 @@ def load_session(jsonl_file: Path) -> SessionStats:
             for asst, tr in intermediate_pairs
         ]
 
-        breakdown = categorizer.categorize_turn(
+        breakdown = categorizer.categorize_exchange(
             human_content=human_content,
             intermediate_pairs=content_pairs,
             prior_assistant_content=prior_assistant_content,
             fresh_tokens=fresh_tokens,
         )
 
-        # Tool calls and files_read come from all assistant messages in the turn
+        # Tool calls and files_read come from all assistant messages in the exchange
         files_read: list[str] = []
         tool_calls: list[tuple[str, dict]] = []
         for asst_msg in turn["assistant_msgs"]:
@@ -303,8 +312,8 @@ def load_session(jsonl_file: Path) -> SessionStats:
         assistant_text = _extract_assistant_text(final_content)
         human_text = _extract_human_text(human_content)
 
-        turns.append(TurnStats(
-            turn_number=turn_number,
+        exchanges.append(ExchangeStats(
+            exchange_number=exchange_number,
             timestamp=final_msg.get("timestamp", ""),
             input_tokens=total_input,
             cache_read_tokens=total_cache_read,
@@ -333,5 +342,5 @@ def load_session(jsonl_file: Path) -> SessionStats:
         session_id=session_id,
         display_name=display_name,
         first_timestamp=first_timestamp,
-        turns=turns,
+        exchanges=exchanges,
     )

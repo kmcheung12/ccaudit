@@ -1,5 +1,5 @@
 import json
-from parser.categorizer import classify_user_blocks, classify_assistant_blocks, categorize_turn
+from parser.categorizer import classify_user_blocks, classify_assistant_blocks, categorize_exchange
 from parser.models import CategoryBreakdown
 
 
@@ -83,9 +83,9 @@ def test_mixed_assistant_content():
     assert result["Tools"] > 0
 
 
-# categorize_turn
+# categorize_exchange
 
-def test_categorize_turn_attributes_tool_result_to_tools():
+def test_categorize_exchange_attributes_tool_result_to_tools():
     human_content = [
         {"type": "tool_result", "tool_use_id": "t1", "content": "file content " * 50},
         {"type": "text", "text": "thanks"},
@@ -93,7 +93,7 @@ def test_categorize_turn_attributes_tool_result_to_tools():
     prior_assistant_content = [
         {"type": "tool_use", "id": "t1", "name": "Read", "input": {"file_path": "/foo.py"}},
     ]
-    bd = categorize_turn(
+    bd = categorize_exchange(
         human_content=human_content,
         intermediate_pairs=[],
         prior_assistant_content=prior_assistant_content,
@@ -104,9 +104,9 @@ def test_categorize_turn_attributes_tool_result_to_tools():
     assert tools_total > 0
     assert bd.messages_tokens > 0
 
-def test_categorize_turn_budget_sums_to_fresh_tokens():
+def test_categorize_exchange_budget_sums_to_fresh_tokens():
     human_content = [{"type": "text", "text": "hello world"}]
-    bd = categorize_turn(
+    bd = categorize_exchange(
         human_content=human_content,
         intermediate_pairs=[],
         prior_assistant_content=[],
@@ -115,7 +115,7 @@ def test_categorize_turn_budget_sums_to_fresh_tokens():
     total = sum(bd.category_totals().values())
     assert total == 500
 
-def test_categorize_turn_mcp_attributed():
+def test_categorize_exchange_mcp_attributed():
     human_content = [{"type": "text", "text": "check slack"}]
     intermediate_pairs = [
         (
@@ -124,7 +124,7 @@ def test_categorize_turn_mcp_attributed():
             [{"type": "tool_result", "tool_use_id": "t1", "content": "some messages " * 20}],
         )
     ]
-    bd = categorize_turn(
+    bd = categorize_exchange(
         human_content=human_content,
         intermediate_pairs=intermediate_pairs,
         prior_assistant_content=[],
