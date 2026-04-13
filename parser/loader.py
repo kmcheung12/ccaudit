@@ -53,12 +53,15 @@ def _extract_text(content) -> str:
                     parts.append(block.get("text", ""))
                 elif block.get("type") == "tool_result":
                     inner = block.get("content", "")
+                    inner_text = ""
                     if isinstance(inner, list):
-                        for ib in inner:
-                            if isinstance(ib, dict) and ib.get("type") == "text":
-                                parts.append(ib.get("text", ""))
+                        inner_text = "\n".join(
+                            ib.get("text", "") for ib in inner
+                            if isinstance(ib, dict) and ib.get("type") == "text"
+                        )
                     else:
-                        parts.append(str(inner))
+                        inner_text = str(inner)
+                    parts.append(f"<function_results>{inner_text}</function_results>")
         return "\n".join(parts)
     return ""
 
@@ -79,6 +82,19 @@ def _extract_human_text(content) -> str:
                 if text and not text.startswith("<system-reminder>") and not text.startswith("Base directory:"):
                     return text[:800]
     return ""
+
+
+def _is_human_user_message(content) -> bool:
+    """Return True if this user message contains a human-typed turn (not purely tool results)."""
+    if isinstance(content, str):
+        return bool(content.strip())
+    if not isinstance(content, list) or not content:
+        return False
+    return any(
+        block.get("type") != "tool_result"
+        for block in content
+        if isinstance(block, dict)
+    )
 
 
 def _extract_tool_calls(content) -> tuple[list[str], list[tuple[str, dict]]]:
@@ -156,15 +172,6 @@ def load_session(jsonl_file: Path) -> SessionStats:
             compact_positions.add(i)
             in_compact = False
 
-    # Determine system prompt baseline from first assistant message
-    system_prompt_tokens = 0
-    for msg in raw_messages:
-        if msg.get("type") == "assistant":
-            usage = msg.get("message", {}).get("usage", {})
-            if usage:
-                system_prompt_tokens = usage.get("cache_read_input_tokens", 0)
-                break
-
     # Build turns: pair each user message with the next assistant message
     turns: list[TurnStats] = []
     pending_user_text: str | None = None
@@ -172,7 +179,6 @@ def load_session(jsonl_file: Path) -> SessionStats:
     pending_user_msg: dict = {}
     after_compact = False
     turn_number = 0
-    is_first_turn = True  # system prompt only attributed to the first turn
 
     for i, msg in enumerate(raw_messages):
         msg_type = msg.get("type")
@@ -194,14 +200,10 @@ def load_session(jsonl_file: Path) -> SessionStats:
             cache_create = usage.get("cache_creation_input_tokens", 0)
             output_tokens = usage.get("output_tokens", 0)
 
-            # System prompt only attributed to the first turn of the session
-            sp_tokens = system_prompt_tokens if is_first_turn else 0
-
             text = pending_user_text or ""
             breakdown = categorizer.categorize(
                 text=text,
-                input_tokens=input_tokens,
-                system_prompt_tokens=sp_tokens,
+                input_tokens=input_tokens + cache_create,
             )
 
             assistant_content = msg.get("message", {}).get("content", "")
@@ -224,6 +226,7 @@ def load_session(jsonl_file: Path) -> SessionStats:
                 tool_calls=tool_calls,
                 raw_user=pending_user_msg,
                 raw_assistant=msg,
+                jsonl_path=str(jsonl_file),
             ))
             pending_user_text = None
             pending_human_text = ""

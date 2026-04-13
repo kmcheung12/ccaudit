@@ -129,3 +129,28 @@ def test_list_projects(tmp_path):
     assert "beta" in names
     for p in projects:
         assert not p.loaded
+
+
+# _is_human_user_message
+
+from parser.loader import _is_human_user_message
+
+def test_human_message_with_text_block():
+    content = [
+        {"type": "text", "text": "Base directory: /skills/foo\n# Foo"},
+        {"type": "text", "text": "hello world"},
+    ]
+    assert _is_human_user_message(content) is True
+
+def test_tool_result_only_is_not_human():
+    content = [
+        {"type": "tool_result", "tool_use_id": "toolu_01", "content": "ok"},
+        {"type": "tool_result", "tool_use_id": "toolu_02", "content": "ok"},
+    ]
+    assert _is_human_user_message(content) is False
+
+def test_string_content_is_human():
+    assert _is_human_user_message("hello") is True
+
+def test_empty_content_is_not_human():
+    assert _is_human_user_message([]) is False
