@@ -154,3 +154,54 @@ def test_string_content_is_human():
 
 def test_empty_content_is_not_human():
     assert _is_human_user_message([]) is False
+
+
+# _group_turns
+
+from parser.loader import _group_turns
+
+def _msg(type_, role=None, content=None, usage=None):
+    m = {"type": type_}
+    if role:
+        m["message"] = {"role": role, "content": content or [], "usage": usage}
+    return m
+
+def test_single_turn_no_tools():
+    msgs = [
+        _msg("user",      "user",      [{"type": "text", "text": "hi"}]),
+        _msg("assistant", "assistant", [{"type": "text", "text": "hello"}],
+             usage={"input_tokens": 10, "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 0, "output_tokens": 5}),
+    ]
+    turns = _group_turns(msgs)
+    assert len(turns) == 1
+    assert len(turns[0]["assistant_msgs"]) == 1
+    assert len(turns[0]["intermediate_pairs"]) == 0
+
+def test_turn_with_one_tool_roundtrip():
+    msgs = [
+        _msg("user",      "user",      [{"type": "text", "text": "hi"}]),
+        _msg("assistant", "assistant", [{"type": "tool_use", "id": "t1", "name": "Read", "input": {}}],
+             usage={"input_tokens": 10, "cache_creation_input_tokens": 5,
+                    "cache_read_input_tokens": 0, "output_tokens": 3}),
+        _msg("user",      "user",      [{"type": "tool_result", "tool_use_id": "t1", "content": "data"}]),
+        _msg("assistant", "assistant", [{"type": "text", "text": "done"}],
+             usage={"input_tokens": 1, "cache_creation_input_tokens": 20,
+                    "cache_read_input_tokens": 50, "output_tokens": 4}),
+    ]
+    turns = _group_turns(msgs)
+    assert len(turns) == 1
+    assert len(turns[0]["intermediate_pairs"]) == 1
+    assert len(turns[0]["assistant_msgs"]) == 2
+
+def test_two_human_turns():
+    usage = {"input_tokens": 5, "cache_creation_input_tokens": 0,
+             "cache_read_input_tokens": 0, "output_tokens": 2}
+    msgs = [
+        _msg("user",      "user",      [{"type": "text", "text": "first"}]),
+        _msg("assistant", "assistant", [{"type": "text", "text": "reply"}], usage=usage),
+        _msg("user",      "user",      [{"type": "text", "text": "second"}]),
+        _msg("assistant", "assistant", [{"type": "text", "text": "reply2"}], usage=usage),
+    ]
+    turns = _group_turns(msgs)
+    assert len(turns) == 2

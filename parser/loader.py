@@ -97,6 +97,74 @@ def _is_human_user_message(content) -> bool:
     )
 
 
+def _group_turns(raw_messages: list[dict]) -> list[dict]:
+    """
+    Group raw JSONL messages into logical turns.
+
+    Each turn dict has keys:
+        human_user_msg      — the opening human user message
+        intermediate_pairs  — list of (assistant_msg, tool_result_user_msg) for each tool round-trip
+        final_assistant_msg — the closing assistant message (has usage)
+        assistant_msgs      — all assistant messages in this turn (intermediates + final)
+        after_compact       — bool
+
+    Assistant messages without usage are skipped (streaming artifacts).
+    """
+    turns = []
+    after_compact = False
+    pending_human: dict | None = None
+    pending_intermediates: list[tuple[dict, dict]] = []
+    pending_assistant: dict | None = None
+
+    def _flush():
+        nonlocal pending_human, pending_intermediates, pending_assistant
+        if pending_human is not None and pending_assistant is not None:
+            all_asst = [asst for asst, _ in pending_intermediates] + [pending_assistant]
+            turns.append({
+                "human_user_msg":     pending_human,
+                "intermediate_pairs": list(pending_intermediates),
+                "final_assistant_msg": pending_assistant,
+                "assistant_msgs":     all_asst,
+                "after_compact":      after_compact,
+            })
+        pending_human = None
+        pending_intermediates = []
+        pending_assistant = None
+
+    for msg in raw_messages:
+        msg_type = msg.get("type")
+
+        if msg_type == "system" and msg.get("subtype") == "compact_boundary":
+            after_compact = True
+            continue
+
+        if msg_type == "user":
+            content = msg.get("message", {}).get("content", [])
+            if _is_human_user_message(content):
+                # New human turn — flush any completed prior turn first
+                _flush()
+                pending_human = msg
+                pending_intermediates = []
+                pending_assistant = None
+            else:
+                # Tool-result message: pair with the last seen assistant
+                if pending_assistant is not None:
+                    pending_intermediates.append((pending_assistant, msg))
+                    pending_assistant = None
+
+        elif msg_type == "assistant":
+            usage = msg.get("message", {}).get("usage")
+            if not usage:
+                continue  # skip streaming artifacts
+            if pending_human is None:
+                continue  # assistant before any human message
+            pending_assistant = msg
+
+    # Flush the final open turn
+    _flush()
+    return turns
+
+
 def _extract_tool_calls(content) -> tuple[list[str], list[tuple[str, dict]]]:
     """
     Extract tool usage from tool_use blocks in an assistant message.
