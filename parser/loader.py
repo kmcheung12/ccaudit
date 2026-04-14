@@ -343,4 +343,5 @@ def load_session(jsonl_file: Path) -> SessionStats:
         display_name=display_name,
         first_timestamp=first_timestamp,
         exchanges=exchanges,
+        jsonl_path=str(jsonl_file),
     )

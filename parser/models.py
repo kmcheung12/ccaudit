@@ -74,6 +74,7 @@ class SessionStats:
     display_name: str
     first_timestamp: Optional[str]
     exchanges: list[ExchangeStats] = field(default_factory=list)
+    jsonl_path: str = ""
 
     @property
     def total_input_tokens(self) -> int:
