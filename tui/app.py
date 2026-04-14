@@ -16,6 +16,8 @@ from tui.watcher import FileWatcher, latest_jsonl_path, find_session_by_path
 class CCAuditApp(App):
     """ccaudit — Claude Code Token Usage Explorer."""
 
+    TITLE = "CC Audit"
+
     CSS = """
     #main {
         layout: horizontal;
