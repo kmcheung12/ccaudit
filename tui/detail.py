@@ -323,7 +323,7 @@ class DetailPane(Widget):
     DetailPane {
         layout: vertical;
     }
-    #turn-path {
+    #exchange-path {
         display: none;
         padding: 0 1;
         height: auto;
@@ -363,7 +363,7 @@ class DetailPane(Widget):
     """
 
     def compose(self):
-        yield Static("", id="turn-path")
+        yield Static("", id="exchange-path")
         yield Static("", id="session-times")
         yield DataTable(id="category-table")
         yield DataTable(id="totals-table")
@@ -391,7 +391,7 @@ class DetailPane(Widget):
         cat_table.add_row(*[f"{cat_totals.get(cat, 0) / total * 100:.1f}%" for cat in CATEGORIES])
 
     def _hide_extras(self) -> None:
-        self.query_one("#turn-path", Static).display = False
+        self.query_one("#exchange-path", Static).display = False
         self.query_one("#session-times", Static).display = False
         self.query_one("#chart-section", Vertical).display = False
         self.query_one("#message-section", VerticalScroll).display = False
@@ -417,14 +417,18 @@ class DetailPane(Widget):
         times_widget = self.query_one("#session-times", Static)
         if isinstance(node, SessionStats) and node.exchanges:
             start = node.first_timestamp[:19].replace("T", " ") if node.first_timestamp else "?"
-            end = node.exchanges[-1].timestamp[:19].replace("T", " ") if node.exchanges[-1].timestamp else "?"
+            end = node.last_timestamp[:19].replace("T", " ") if node.last_timestamp else "?"
             times_widget.update(f"Start: {start}   End: {end}")
             times_widget.display = True
         else:
             times_widget.display = False
 
         if isinstance(node, ExchangeStats):
+            start = node.first_timestamp[:19].replace("T", " ") if node.first_timestamp else "?"
+            end = node.last_timestamp[:19].replace("T", " ") if node.last_timestamp else "?"
+            times_widget.update(f"Start: {start}   End: {end}")
             cat_totals = node.category_breakdown.category_totals()
+            times_widget.display = True
         else:
             cat_totals = node.category_totals()
         self._refresh_category_table(cat_totals)
@@ -439,10 +443,15 @@ class DetailPane(Widget):
     def update_exchange(self, exchange: ExchangeStats) -> None:
         """Refresh for an ExchangeStats node — shows category breakdown and message preview."""
         self._hide_extras()
-        path_widget = self.query_one("#turn-path", Static)
+        path_widget = self.query_one("#exchange-path", Static)
         if exchange.jsonl_path:
-            path_widget.update(exchange.jsonl_path)
+            path_widget.update(f"{exchange.jsonl_path}  L:{exchange.jsonl_line_start} - L:{exchange.jsonl_line_end}")
             path_widget.display = True
+        times_widget = self.query_one("#session-times", Static)
+        start = exchange.first_timestamp[:19].replace("T", " ") if exchange.first_timestamp else "?"
+        end = exchange.last_timestamp[:19].replace("T", " ") if exchange.last_timestamp else "?"
+        times_widget.update(f"Start: {start}   End: {end}")
+        times_widget.display = True
         self._refresh_category_table(exchange.category_breakdown.category_totals())
         self._refresh_totals(_get_totals(exchange))
 

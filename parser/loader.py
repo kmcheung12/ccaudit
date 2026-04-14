@@ -234,22 +234,24 @@ def load_session(jsonl_file: Path) -> SessionStats:
 
     raw_messages: list[dict] = []
     with open(jsonl_file, encoding="utf-8") as f:
-        for line in f:
+        for lineno, line in enumerate(f, start=1):
             line = line.strip()
             if not line:
                 continue
             try:
-                raw_messages.append(json.loads(line))
+                msg = json.loads(line)
+                msg["_lineno"] = lineno
+                raw_messages.append(msg)
             except json.JSONDecodeError:
                 continue
 
     grouped = _group_exchanges(raw_messages)
     exchanges: list[ExchangeStats] = []
 
-    for exchange_number, turn in enumerate(grouped, start=1):
-        human_msg = turn["human_user_msg"]
-        final_msg = turn["final_assistant_msg"]
-        intermediate_pairs = turn["intermediate_pairs"]
+    for exchange_number, exchange in enumerate(grouped, start=1):
+        human_msg = exchange["human_user_msg"]
+        final_msg = exchange["final_assistant_msg"]
+        intermediate_pairs = exchange["intermediate_pairs"]
 
         human_content = human_msg.get("message", {}).get("content", [])
         final_content = final_msg.get("message", {}).get("content", [])
@@ -261,7 +263,7 @@ def load_session(jsonl_file: Path) -> SessionStats:
         total_cache_create_5m = 0
         total_cache_create_1h = 0
         total_output = 0
-        for asst_msg in turn["assistant_msgs"]:
+        for asst_msg in exchange["assistant_msgs"]:
             usage = asst_msg.get("message", {}).get("usage", {})
             total_input        += usage.get("input_tokens", 0)
             total_cache_read   += usage.get("cache_read_input_tokens", 0)
@@ -273,7 +275,7 @@ def load_session(jsonl_file: Path) -> SessionStats:
 
         fresh_tokens = total_input + total_cache_create
 
-        # Prior assistant content (the message immediately before this turn's human message)
+        # Prior assistant content (the message immediately before this exchange's human message)
         # is needed to resolve tool_result → tool_name mappings in the human message.
         # _group_exchanges doesn't carry it, so we find it by walking raw_messages.
         prior_assistant_content: list = []
@@ -303,7 +305,7 @@ def load_session(jsonl_file: Path) -> SessionStats:
         # Tool calls and files_read come from all assistant messages in the exchange
         files_read: list[str] = []
         tool_calls: list[tuple[str, dict]] = []
-        for asst_msg in turn["assistant_msgs"]:
+        for asst_msg in exchange["assistant_msgs"]:
             asst_content = asst_msg.get("message", {}).get("content", [])
             f, c = _extract_tool_calls(asst_content)
             files_read.extend(f)
@@ -311,6 +313,9 @@ def load_session(jsonl_file: Path) -> SessionStats:
 
         assistant_text = _extract_assistant_text(final_content)
         human_text = _extract_human_text(human_content)
+
+        line_start = human_msg.get("_lineno", 0)
+        line_end = exchange["assistant_msgs"][-1].get("_lineno", 0) if exchange["assistant_msgs"] else line_start
 
         exchanges.append(ExchangeStats(
             exchange_number=exchange_number,
@@ -322,26 +327,21 @@ def load_session(jsonl_file: Path) -> SessionStats:
             cache_create_5m_tokens=total_cache_create_5m,
             cache_create_1h_tokens=total_cache_create_1h,
             category_breakdown=breakdown,
-            after_compact=turn["after_compact"],
+            after_compact=exchange["after_compact"],
             user_text=human_text,
             assistant_text=assistant_text,
             files_read=files_read,
             tool_calls=tool_calls,
             raw_user=human_msg,
-            raw_assistants=turn["assistant_msgs"],
+            raw_assistants=exchange["assistant_msgs"],
             jsonl_path=str(jsonl_file),
+            jsonl_line_start=line_start,
+            jsonl_line_end=line_end,
         ))
-
-    first_timestamp = None
-    for msg in raw_messages:
-        if "timestamp" in msg:
-            first_timestamp = msg["timestamp"]
-            break
 
     return SessionStats(
         session_id=session_id,
         display_name=display_name,
-        first_timestamp=first_timestamp,
         exchanges=exchanges,
         jsonl_path=str(jsonl_file),
     )

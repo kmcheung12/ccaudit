@@ -6,7 +6,22 @@ ccaudit is a terminal UI for exploring how Claude Code spends your token budget.
 
 ---
 
-## Getting Started
+## Contents
+
+- [Getting Started](#getting-started)
+- [How Sessions and Exchanges Are Stored](#how-sessions-and-exchanges-are-stored)
+- [What Is an Exchange?](#what-is-an-exchange)
+- [Top-Level Message Envelope](#top-level-message-envelope)
+- [User Message](#user-message)
+- [Assistant Message](#assistant-message)
+- [System Message — Compact Boundary](#system-message--compact-boundary)
+- [Token Categories](#token-categories)
+- [Parsed Data Model](#parsed-data-model)
+- [Schema Sources](#schema-sources)
+
+---
+
+## Getting Started 
 
 ### With uv (recommended)
 
@@ -45,6 +60,7 @@ python main.py -d .
 python main.py -d ~/code/myproject
 ```
 
+
 ---
 
 ## How Sessions and Exchanges Are Stored
@@ -64,6 +80,7 @@ Claude Code records every API call to disk as a JSONL file. Each line is one raw
 - **Project slug**: a filesystem-safe encoding of the working directory path. Forward slashes are replaced with hyphens, with a leading hyphen. Example: `/Users/alan/code/myproject` → `-Users-alan-code-myproject`.
 - **Session ID**: a UUID identifying one continuous Claude Code session. The JSONL filename stem is the session ID.
 - **JSONL**: one JSON object per line; blank lines and malformed lines are skipped.
+
 
 ---
 
@@ -93,10 +110,11 @@ Exchange boundaries are detected by **content inspection**, not by pointer follo
 
 Token usage for an exchange is the **sum across all assistant messages** in that exchange, not just the final one.
 
+
 ---
 
 ## Top-Level Message Envelope
-
+  
 Every line in the JSONL file is a JSON object with this shape:
 
 ```json
@@ -124,6 +142,7 @@ Every line in the JSONL file is a JSON object with this shape:
 | `subtype` | `type` is `"system"` | Currently only `"compact_boundary"` is observed. |
 | `content` | `type` is `"system"` | The compacted context summary text (only present on compact boundary events). |
 | `compactMetadata` | `type` is `"system"` | Metadata about the compaction event (see below). |
+
 
 ---
 
@@ -171,6 +190,7 @@ Claude Code builds user messages in this order (concatenated into the content ar
 4. **Human text** — the actual message the user typed (always the last plain text block)
 
 Extracting the human's text means walking backwards through the content array to find the last text block that is not injected context.
+
 
 ---
 
@@ -237,6 +257,7 @@ When `type == "assistant"`, the `message` object is:
 | `name` | The tool name (e.g. `"Read"`, `"Write"`, `"Bash"`, `"Agent"`, `"Grep"`, `"Glob"`, or `"mcp__<server>__<tool>"` for MCP tools). |
 | `input` | Tool-specific parameters as a dict. |
 
+
 ---
 
 ## System Message — Compact Boundary
@@ -264,24 +285,49 @@ When `type == "system"` and `subtype == "compact_boundary"`, Claude Code has com
 
 The first exchange after a compact boundary is tagged `after_compact = true` in the parsed model. Its `cache_read_input_tokens` reflects the compressed context being cached, not the original system prompt. In the TUI, these exchanges are marked with a ⚡ prefix.
 
+
 ---
 
 ## Token Categories
 
 ccaudit classifies each exchange's fresh token budget across six categories by inspecting content blocks structurally, then attributing tokens proportionally to character counts.
 
-| Category | Source blocks | Examples |
-|---|---|---|
-| **Skills** | `text` blocks (user) whose text starts with `Base directory: .../skills/` | Superpowers skill files loaded at the start of a message |
-| **Tools** | `tool_use` blocks (assistant) for built-in tools; matching `tool_result` blocks (user) | `Read`, `Write`, `Bash`, `Glob`, `Grep`, `WebFetch`, etc. |
-| **MCP** | `tool_use` blocks (assistant) whose name starts with `mcp__`; matching `tool_result` blocks (user) | `mcp__github__...`, `mcp__slack__...` |
-| **Agents** | `tool_use` blocks (assistant) with `name == "Agent"` | Subagent dispatch via the `Agent` tool |
-| **Messages** | Remaining `text` blocks — human-typed message and Claude's written response | The actual conversation content |
-| **Other** | Unclassified content | Injected context blocks that don't match any pattern above |
+### Category Definitions
 
-**How attribution works:** The fresh token budget for an exchange (`input_tokens + cache_creation_input_tokens`, summed across all assistant messages in the exchange) is distributed across categories in proportion to their share of total characters in the exchange's content. This is an approximation — character count is not the same as token count, and content that tokenizes densely (code, JSON) may be under-attributed relative to prose.
+| Category | What it represents | Identified by |
+|---|---|---|
+| **Skills** | Skill files injected into the prompt by the Superpowers plugin or similar systems | `text` blocks (user) whose first line starts with `Base directory: .../skills/` |
+| **Tools** | Built-in Claude Code tool calls and their results — file reads, shell commands, searches, web fetches, etc. | `tool_use` blocks (assistant) for non-MCP, non-Agent tools; matching `tool_result` blocks (user) |
+| **MCP** | MCP (Model Context Protocol) server tool calls and their results | `tool_use` blocks (assistant) whose name starts with `mcp__`; matching `tool_result` blocks (user) |
+| **Agents** | Subagent dispatch — calls to the `Agent` tool that spin up a subprocess | `tool_use` blocks (assistant) with `name == "Agent"` |
+| **Messages** | The actual human-to-Claude conversation: what you typed and what Claude wrote back | The last `text` block in user content (the human's message); all `text` blocks in assistant content |
+| **Other** | Invisible overhead not present in the JSONL — see below | Fresh tokens remaining after attributing all visible characters |
+
+### What "Other" Represents
+
+**Other is typically the largest category and reflects content that is genuinely invisible to ccaudit.** The JSONL does not capture the full prompt that Claude receives — several things are injected server-side or reconstructed by Claude Code without being logged:
+
+- **System prompt** — Anthropic's base system prompt is sent with every request but never written to the JSONL
+- **CLAUDE.md** — project and user instructions are injected but not logged as separate blocks
+- **Memory files** — auto-memory content loaded at session start
+- **Cache refresh overhead** — when a cache miss forces Claude to re-process the entire context window, `cache_creation_input_tokens` can spike to tens of thousands of tokens while the visible user message is only a few hundred characters; all of that invisible re-processing goes to Other
+- **Other injected context** — tool descriptions, project state, and other content that Claude Code or the API layer inserts without logging
+
+A large Other on a given exchange usually means either (a) the system prompt and CLAUDE.md are dominating that exchange's context, or (b) a cache refresh occurred.
+
+### How Attribution Works
+
+The fresh token budget for an exchange (`input_tokens + cache_creation_input_tokens`, summed across all assistant messages in the exchange) is split into two parts:
+
+1. **Visible token estimate** — an upper bound on how many tokens the logged content could plausibly represent, computed as `total_visible_chars / 4`. The constant 4 is a standard English/code heuristic (roughly 3.5–4 characters per token); it errs toward attributing more to Other.
+2. **Invisible overhead** — `fresh_tokens − visible_token_estimate`, floored at zero. Assigned entirely to **Other**.
+
+The visible categories (Skills, Tools, MCP, Agents, Messages) share only the visible token estimate, divided in proportion to their character counts.
+
+This means Other will almost always be substantial — reflecting the real cost of the system prompt and injected context — rather than being a rounding remainder. It is an approximation; the true split cannot be recovered without access to the full reconstructed prompt.
 
 **MCP tool results** are routed to the MCP category (not Tools) by looking up the `tool_use_id` in the preceding assistant message to recover the original tool name.
+
 
 ---
 
@@ -336,6 +382,7 @@ One project directory under `~/.claude/projects/`.
 | `loaded` | `False` until `load_project()` is called (lazy loading) |
 | `load_error` | Set to an error string if loading fails; `None` otherwise |
 
+
 ---
 
 ## Schema Sources
@@ -353,3 +400,5 @@ The fields documented here come from two distinct sources:
 - `requestId` corresponds to the `x-request-id` response header from the API, recorded by Claude Code for traceability.
 
 The JSONL format as a whole is Claude Code's own storage format and is not officially documented by Anthropic.
+
+[Back to top ↑](#contents)

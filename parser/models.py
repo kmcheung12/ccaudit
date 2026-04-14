@@ -66,15 +66,32 @@ class ExchangeStats:
     raw_user: dict = field(default_factory=dict)
     raw_assistants: list[dict] = field(default_factory=list)
     jsonl_path: str = ""
+    jsonl_line_start: int = 0
+    jsonl_line_end: int = 0
+
+    @property
+    def first_timestamp(self) -> str:
+        return self.raw_user.get("timestamp", "") if self.raw_user else ""
+
+    @property
+    def last_timestamp(self) -> str:
+        return self.timestamp
 
 
 @dataclass
 class SessionStats:
     session_id: str
     display_name: str
-    first_timestamp: Optional[str]
     exchanges: list[ExchangeStats] = field(default_factory=list)
     jsonl_path: str = ""
+
+    @property
+    def first_timestamp(self) -> Optional[str]:
+        return self.exchanges[0].timestamp if self.exchanges else None
+
+    @property
+    def last_timestamp(self) -> Optional[str]:
+        return self.exchanges[-1].last_timestamp if self.exchanges else None
 
     @property
     def total_input_tokens(self) -> int:

@@ -3,6 +3,9 @@ import json as _json
 from parser.models import CategoryBreakdown, CategoryItem
 
 
+CHARS_PER_TOKEN = 4  # rough English/code heuristic; errs toward attributing more to "Other"
+
+
 def _classify_text_block(text: str, is_last_text: bool) -> str:
     first_line = text.split("\n", 1)[0]
     if first_line.startswith("Base directory") and "/skills/" in first_line:
@@ -92,8 +95,11 @@ def categorize_exchange(human_content, intermediate_pairs, prior_assistant_conte
 
     total_chars = sum(totals.values()) or 1
 
+    visible_token_estimate = max(1, total_chars // CHARS_PER_TOKEN)
+    invisible_overhead = max(0, fresh_tokens - visible_token_estimate)
+
     def scale(n: int) -> int:
-        return round((n / total_chars) * fresh_tokens)
+        return round((n / total_chars) * visible_token_estimate)
 
     bd = CategoryBreakdown()
     bd.skills    = [CategoryItem(name="Skills",  tokens=scale(totals["Skills"]))]  if totals["Skills"]  else []
@@ -109,5 +115,5 @@ def categorize_exchange(human_content, intermediate_pairs, prior_assistant_conte
         + sum(i.tokens for i in bd.agents)
         + bd.messages_tokens
     )
-    bd.other_tokens = max(0, fresh_tokens - attributed)
+    bd.other_tokens = invisible_overhead + max(0, visible_token_estimate - attributed)
     return bd
