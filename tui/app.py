@@ -102,7 +102,10 @@ class CCAuditApp(App):
             return
         added = apply_session_updates(session, updated)
         if added > 0:
-            self.query_one("#tree-pane", StatsTree).refresh_session_node(session)
+            tree_pane = self.query_one("#tree-pane", StatsTree)
+            tree_pane.refresh_session_node(session)
+            if tree_pane.current_node_data() is session:
+                self.query_one("#detail-pane", DetailPane).update(session)
 
     def _on_dir_changed(self, dir_path: str) -> None:
         """Called on the Textual thread when a watched directory gets a new JSONL file."""

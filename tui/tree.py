@@ -121,6 +121,11 @@ class StatsTree(Widget):
                 return found
         return None
 
+    def current_node_data(self):
+        """Return the data of the currently focused tree node, or None."""
+        cursor = self.query_one("#stats-tree", _NavTree).cursor_node
+        return cursor.data if cursor else None
+
     def select_node(self, target_data) -> None:
         """Move the tree cursor to the node whose data is `target_data`, expanding ancestors."""
         tree = self.query_one("#stats-tree", _NavTree)
@@ -167,8 +172,6 @@ class StatsTree(Widget):
         if not session.exchanges:
             label += " (empty)"
         session_node.label = label
-        if not session_node.is_expanded:
-            return
         existing_count = sum(
             1 for child in session_node.children
             if isinstance(child.data, ExchangeStats)
