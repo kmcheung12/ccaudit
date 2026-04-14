@@ -79,3 +79,45 @@ def test_apply_session_updates_no_change():
         added = apply_session_updates(session, updated)
         assert added == 0
         assert len(session.exchanges) == 1
+
+from parser.models import GlobalStats, ProjectStats, SessionStats as _SessionStats
+from tui.watcher import latest_jsonl_path, find_session_by_path
+
+def _make_loaded_project(sessions: list) -> ProjectStats:
+    p = ProjectStats(project_slug="test", display_name="test")
+    p.sessions = sessions
+    p.loaded = True
+    return p
+
+def test_latest_jsonl_path_returns_most_recent(tmp_path):
+    a = tmp_path / "aaa.jsonl"
+    b = tmp_path / "bbb.jsonl"
+    a.write_text("")
+    b.write_text("")
+    os.utime(a, (1000, 1000))
+    os.utime(b, (2000, 2000))
+
+    s_a = _SessionStats(session_id="aaa", display_name="aaa", first_timestamp=None, jsonl_path=str(a))
+    s_b = _SessionStats(session_id="bbb", display_name="bbb", first_timestamp=None, jsonl_path=str(b))
+    project = _make_loaded_project([s_a, s_b])
+
+    result = latest_jsonl_path([project])
+    assert result == str(b)
+
+def test_latest_jsonl_path_skips_unloaded():
+    project = ProjectStats(project_slug="x", display_name="x")
+    project.loaded = False
+    assert latest_jsonl_path([project]) is None
+
+def test_find_session_by_path():
+    s = _SessionStats(session_id="aaa", display_name="aaa", first_timestamp=None, jsonl_path="/tmp/aaa.jsonl")
+    project = _make_loaded_project([s])
+
+    found_project, found_session = find_session_by_path([project], "/tmp/aaa.jsonl")
+    assert found_session is s
+    assert found_project is project
+
+def test_find_session_by_path_not_found():
+    p, s = find_session_by_path([], "/tmp/nope.jsonl")
+    assert p is None
+    assert s is None
