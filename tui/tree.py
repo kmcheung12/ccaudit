@@ -159,7 +159,6 @@ class StatsTree(Widget):
         Updates the session node label. If the session node is expanded,
         appends tree nodes for exchanges beyond the previously rendered count.
         """
-        from parser.models import ExchangeStats
         tree = self.query_one("#stats-tree", _NavTree)
         session_node = self._find_node_by_data(tree.root, session)
         if session_node is None:
