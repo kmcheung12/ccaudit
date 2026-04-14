@@ -345,3 +345,17 @@ def load_session(jsonl_file: Path) -> SessionStats:
         exchanges=exchanges,
         jsonl_path=str(jsonl_file),
     )
+
+
+def apply_session_updates(existing: SessionStats, updated: SessionStats) -> int:
+    """Append new exchanges from `updated` to `existing` in-place.
+
+    Returns the number of new exchanges added. Mutates `existing` directly
+    so all existing references to the object remain valid.
+    """
+    old_count = len(existing.exchanges)
+    new_count = len(updated.exchanges)
+    if new_count <= old_count:
+        return 0
+    existing.exchanges.extend(updated.exchanges[old_count:])
+    return new_count - old_count
