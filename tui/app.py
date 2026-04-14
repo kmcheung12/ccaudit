@@ -1,13 +1,16 @@
 # tui/app.py
 from __future__ import annotations
+from pathlib import Path
 from textual.app import App, ComposeResult
 from textual.widgets import Header, Footer, Input, DataTable
 from textual.containers import Horizontal, Vertical
 from textual.binding import Binding
 from textual import events
-from parser.models import GlobalStats, ProjectStats, ExchangeStats
+from parser.models import GlobalStats, ProjectStats, SessionStats, ExchangeStats
+from parser.loader import PROJECTS_DIR, load_session, apply_session_updates
 from tui.tree import StatsTree, NodeSelected
 from tui.detail import DetailPane
+from tui.watcher import FileWatcher, latest_jsonl_path, find_session_by_path
 
 
 class CCAuditApp(App):
@@ -53,6 +56,77 @@ class CCAuditApp(App):
     def on_mount(self) -> None:
         detail = self.query_one("#detail-pane", DetailPane)
         detail.update(self._global)
+
+        self._latest_watched: str | None = None
+        self._watcher = FileWatcher(
+            on_file_changed=lambda p: self.call_from_thread(self._on_jsonl_changed, p),
+            on_dir_changed=lambda p: self.call_from_thread(self._on_dir_changed, p),
+        )
+        for project in self._global.projects:
+            base = Path(project.projects_dir) if project.projects_dir else PROJECTS_DIR
+            project_dir = base / project.project_slug
+            if project_dir.is_dir():
+                self._watcher.watch_dir(str(project_dir))
+        self._watch_latest()
+        self._watcher.start()
+
+    def _watch_latest(self) -> None:
+        """Watch the JSONL file with the most recent mtime."""
+        path = latest_jsonl_path(self._global.projects)
+        if path and path != self._latest_watched:
+            self._latest_watched = path
+            self._watcher.watch_file(path)
+
+    def on_tree_node_expanded(self, event) -> None:
+        node = event.node
+        if isinstance(node.data, ProjectStats):
+            for session in node.data.sessions:
+                if session.jsonl_path:
+                    self._watcher.watch_file(session.jsonl_path)
+
+    def on_tree_node_collapsed(self, event) -> None:
+        node = event.node
+        if isinstance(node.data, ProjectStats):
+            for session in node.data.sessions:
+                if session.jsonl_path and session.jsonl_path != self._latest_watched:
+                    self._watcher.unwatch_file(session.jsonl_path)
+
+    def _on_jsonl_changed(self, jsonl_path: str) -> None:
+        """Called on the Textual thread when a watched JSONL file is modified."""
+        project, session = find_session_by_path(self._global.projects, jsonl_path)
+        if session is None:
+            return
+        try:
+            updated = load_session(Path(jsonl_path))
+        except Exception:
+            return
+        added = apply_session_updates(session, updated)
+        if added > 0:
+            self.query_one("#tree-pane", StatsTree).refresh_session_node(session)
+
+    def _on_dir_changed(self, dir_path: str) -> None:
+        """Called on the Textual thread when a watched directory gets a new JSONL file."""
+        project = None
+        for p in self._global.projects:
+            base = Path(p.projects_dir) if p.projects_dir else PROJECTS_DIR
+            if str(base / p.project_slug) == dir_path:
+                project = p
+                break
+        if project is None or not project.loaded:
+            return
+        existing_paths = {s.jsonl_path for s in project.sessions}
+        for jsonl_file in sorted(Path(dir_path).glob("*.jsonl")):
+            path_str = str(jsonl_file)
+            if path_str in existing_paths:
+                continue
+            try:
+                new_session = load_session(jsonl_file)
+            except Exception:
+                continue
+            project.sessions.append(new_session)
+            self._watcher.watch_file(path_str)
+            self.query_one("#tree-pane", StatsTree).add_session_node(project, new_session)
+        self._watch_latest()
 
     def on_node_selected(self, event: NodeSelected) -> None:
         detail = self.query_one("#detail-pane", DetailPane)
