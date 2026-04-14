@@ -2,7 +2,7 @@
 from __future__ import annotations
 from pathlib import Path
 from textual.app import App, ComposeResult
-from textual.widgets import Header, Footer, Input, DataTable
+from textual.widgets import Header, Footer, Input, DataTable, Tree
 from textual.containers import Horizontal, Vertical
 from textual.binding import Binding
 from textual import events
@@ -77,14 +77,14 @@ class CCAuditApp(App):
             self._latest_watched = path
             self._watcher.watch_file(path)
 
-    def on_tree_node_expanded(self, event) -> None:
+    def on_tree_node_expanded(self, event: Tree.NodeExpanded) -> None:
         node = event.node
         if isinstance(node.data, ProjectStats):
             for session in node.data.sessions:
                 if session.jsonl_path:
                     self._watcher.watch_file(session.jsonl_path)
 
-    def on_tree_node_collapsed(self, event) -> None:
+    def on_tree_node_collapsed(self, event: Tree.NodeCollapsed) -> None:
         node = event.node
         if isinstance(node.data, ProjectStats):
             for session in node.data.sessions:
