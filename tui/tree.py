@@ -152,3 +152,64 @@ class StatsTree(Widget):
             if not query or query in p.display_name.lower()
         ]
         self._add_project_nodes(tree.root, matching)
+
+    def refresh_session_node(self, session) -> None:
+        """Update tree after new exchanges were appended to `session` in-place.
+
+        Updates the session node label. If the session node is expanded,
+        appends tree nodes for exchanges beyond the previously rendered count.
+        """
+        from parser.models import ExchangeStats
+        tree = self.query_one("#stats-tree", _NavTree)
+        session_node = self._find_node_by_data(tree.root, session)
+        if session_node is None:
+            return
+        label = f"🗂 {session.display_name}"
+        if not session.exchanges:
+            label += " (empty)"
+        session_node.label = label
+        if not session_node.is_expanded:
+            return
+        existing_count = sum(
+            1 for child in session_node.children
+            if isinstance(child.data, ExchangeStats)
+        )
+        for exchange in session.exchanges[existing_count:]:
+            prefix = "⚡" if exchange.after_compact else "↩"
+            t_node = session_node.add(
+                f"{prefix} exchange {exchange.exchange_number}",
+                data=exchange,
+                expand=False,
+            )
+            for cat_name, tokens in exchange.category_breakdown.category_totals().items():
+                if tokens == 0:
+                    continue
+                t_node.add_leaf(f"  {cat_name}: {tokens:,}", data=(exchange, cat_name))
+
+    def add_session_node(self, project, session) -> None:
+        """Insert a new session node under an already-expanded project node.
+
+        No-ops if the project node is not currently expanded (the node will be
+        rendered correctly the next time the user expands the project).
+        """
+        tree = self.query_one("#stats-tree", _NavTree)
+        project_node = self._find_node_by_data(tree.root, project)
+        if project_node is None or not project_node.is_expanded:
+            return
+        label = f"🗂 {session.display_name}"
+        if not session.exchanges:
+            label += " (empty)"
+        s_node = project_node.add(label, data=session, expand=False)
+        if session.first_timestamp:
+            s_node.tooltip = session.first_timestamp[:19].replace("T", " ")
+        for exchange in session.exchanges:
+            prefix = "⚡" if exchange.after_compact else "↩"
+            t_node = s_node.add(
+                f"{prefix} exchange {exchange.exchange_number}",
+                data=exchange,
+                expand=False,
+            )
+            for cat_name, tokens in exchange.category_breakdown.category_totals().items():
+                if tokens == 0:
+                    continue
+                t_node.add_leaf(f"  {cat_name}: {tokens:,}", data=(exchange, cat_name))
