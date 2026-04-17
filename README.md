@@ -17,6 +17,7 @@ ccaudit is a terminal UI for exploring how Claude Code spends your token budget.
 - [System Message — Compact Boundary](#system-message--compact-boundary)
 - [Token Categories](#token-categories)
 - [Parsed Data Model](#parsed-data-model)
+  - [Model Attribution](#model-attribution)
 - [Schema Sources](#schema-sources)
 
 ---
@@ -201,6 +202,7 @@ When `type == "assistant"`, the `message` object is:
 ```json
 {
   "role": "assistant",
+  "model": "claude-sonnet-4-6",
   "content": "string" | [ ...content blocks... ],
   "usage": {
     "input_tokens": 1234,
@@ -218,6 +220,7 @@ When `type == "assistant"`, the `message` object is:
 | Field | Meaning |
 |---|---|
 | `role` | Always `"assistant"`. |
+| `model` | The model that produced this response (e.g. `"claude-sonnet-4-6"`). May be `"<synthetic>"` for internally-generated responses that did not invoke a real LLM. |
 | `content` | The assistant's response: a plain string (rare) or a list of text and tool-use blocks. |
 | `usage` | Token accounting for this API call. Messages without `usage` are streaming artifacts and are skipped by the loader. |
 
@@ -355,9 +358,18 @@ One complete human-to-assistant exchange, including all intermediate tool round-
 | `assistant_text` | `str` | Text blocks from the final assistant message joined (≤800 chars) |
 | `files_read` | `list[str]` | Paths from `Read` calls; `Glob:pattern` for Glob; `Grep:'pattern' in path` for Grep |
 | `tool_calls` | `list[tuple[str, dict]]` | `(tool_name, input_dict)` for every `tool_use` block across all assistant messages |
+| `model` | `str` | Model name for this exchange (see [Model Attribution](#model-attribution)); empty string if unknown |
 | `raw_user` | `dict` | Full JSONL envelope of the opening human user message |
 | `raw_assistants` | `list[dict]` | Full JSONL envelopes of all assistant messages in the exchange (intermediates + final) |
 | `jsonl_path` | `str` | Absolute path to the source JSONL file |
+
+#### Model Attribution
+
+The `model` field is populated from `message.model` on the first assistant message in the exchange that carries a non-synthetic model value. A few caveats:
+
+- **One model per exchange** — ccaudit assumes the whole exchange ran on a single model. In practice Claude Code does not switch models mid-exchange, so the first assistant response's model is used for the entire exchange.
+- **`<synthetic>` is ignored** — some assistant messages carry `message.model = "<synthetic>"` to indicate the response was produced internally without a real LLM call (e.g. canned responses or token usage hitting limit). These values are skipped; the loader continues to the next assistant message in the exchange looking for a real model name.
+- If no real model is found, `model` is left as an empty string and the exchange is excluded from per-model aggregations in the TUI.
 
 ### SessionStats
 
