@@ -46,6 +46,30 @@ _CAT_STYLE = {
 }
 
 
+def _fmt_duration(seconds: float) -> str:
+    """Format a duration in seconds to a human-readable string."""
+    if seconds <= 0.0:
+        return "\u2014"
+    s = int(seconds)
+    if s < 60:
+        return f"{s}s"
+    if s < 3600:
+        m, sec = divmod(s, 60)
+        return f"{m}m {sec}s"
+    h, rem = divmod(s, 3600)
+    m = rem // 60
+    return f"{h}h {m}m"
+
+
+def _short_model(model: str) -> str:
+    """Strip 'claude-' prefix and return 'unknown' if empty."""
+    if not model:
+        return "unknown"
+    if model.startswith("claude-"):
+        return model[len("claude-"):]
+    return model
+
+
 def _get_totals(node) -> TokenTotals:
     """Extract raw token totals from any stats node."""
     if isinstance(node, ExchangeStats):
@@ -67,14 +91,50 @@ def _get_totals(node) -> TokenTotals:
     )
 
 
-def build_rows(node) -> tuple[list[tuple[str, int, float]], TokenTotals]:
-    """
-    Build category rows and token totals for any stats node.
+def _collect_model_stats(node) -> dict[str, dict]:
+    """Collect per-model token stats from a SessionStats, ProjectStats, or GlobalStats node."""
+    result: dict[str, dict] = {}
 
-    Returns:
-        rows: list of (category_name, tokens, percentage) sorted by tokens descending
-        totals: TokenTotals with raw cache/output breakdown
-    """
+    def _accumulate(exchange: ExchangeStats) -> None:
+        if not exchange.model:
+            return
+        key = _short_model(exchange.model)
+        if key not in result:
+            result[key] = {
+                "input": 0,
+                "cache_read": 0,
+                "cache_create": 0,
+                "cache_create_5m": 0,
+                "cache_create_1h": 0,
+                "output": 0,
+                "duration": 0.0,
+            }
+        d = result[key]
+        d["input"] += exchange.input_tokens
+        d["cache_read"] += exchange.cache_read_tokens
+        d["cache_create"] += exchange.cache_create_tokens
+        d["cache_create_5m"] += exchange.cache_create_5m_tokens
+        d["cache_create_1h"] += exchange.cache_create_1h_tokens
+        d["output"] += exchange.output_tokens
+        d["duration"] += exchange.duration_seconds
+
+    if isinstance(node, SessionStats):
+        for exchange in node.exchanges:
+            _accumulate(exchange)
+    elif isinstance(node, ProjectStats):
+        for session in node.sessions:
+            for exchange in session.exchanges:
+                _accumulate(exchange)
+    elif isinstance(node, GlobalStats):
+        for project in node.projects:
+            for session in project.sessions:
+                for exchange in session.exchanges:
+                    _accumulate(exchange)
+
+    return result
+
+
+def build_rows(node) -> tuple[list[tuple[str, int, float]], TokenTotals]:
     if isinstance(node, ExchangeStats):
         cat_totals = node.category_breakdown.category_totals()
     else:
@@ -94,10 +154,6 @@ def build_rows(node) -> tuple[list[tuple[str, int, float]], TokenTotals]:
 
 
 def build_category_rows(exchange: ExchangeStats, cat_name: str) -> list[tuple[str, int]]:
-    """
-    Return individual items within a category for an exchange.
-    Returns list of (item_name, tokens) sorted by tokens descending.
-    """
     bd = exchange.category_breakdown
     mapping = {
         "Skills": bd.skills,
@@ -111,7 +167,6 @@ def build_category_rows(exchange: ExchangeStats, cat_name: str) -> list[tuple[st
 
 
 def build_chart_legend() -> Text:
-    """Build the colour legend shared by all bar charts (same order as bar segments)."""
     result = Text()
     for cat in CATEGORIES:
         style = _CAT_STYLE.get(cat, "white")
@@ -123,7 +178,6 @@ def build_chart_legend() -> Text:
 # --- Bar row builders ---
 
 def _session_bar_rows(node: GlobalStats) -> list[BarRow]:
-    """One bar per loaded project."""
     rows = []
     for project in node.projects:
         if not project.loaded or not project.sessions:
@@ -142,7 +196,6 @@ def _session_bar_rows(node: GlobalStats) -> list[BarRow]:
 
 
 def _session_bar_rows_for_project(node: ProjectStats) -> list[BarRow]:
-    """One bar per session."""
     rows = []
     for session in node.sessions:
         rows.append(BarRow(
@@ -159,7 +212,6 @@ def _session_bar_rows_for_project(node: ProjectStats) -> list[BarRow]:
 
 
 def _exchange_bar_rows(node: SessionStats) -> list[BarRow]:
-    """One bar per exchange."""
     rows = []
     for exchange in node.exchanges:
         prefix = "⚡" if exchange.after_compact else " "
@@ -191,29 +243,20 @@ _NUM_W = 12
 
 
 def _display_width(s: str) -> int:
-    """Return the terminal display width of a string (wide chars count as 2)."""
     return sum(2 if unicodedata.east_asian_width(ch) in ('W', 'F') else 1 for ch in s)
 
 
 def _ljust_display(s: str, width: int) -> str:
-    """Like str.ljust but pads to visual display width, not character count."""
     return s + " " * max(0, width - _display_width(s))
 
 
 def build_chart_bars(rows: list[BarRow], bar_width: int = 28, cursor: int = -1) -> Text:
-    """
-    Render a list of BarRows as a stacked bar chart with columnar token counts.
-
-    Layout per row:
-        <label>  <category bar (fresh tokens only)>  Input  Write  Read  Out
-    """
     if not rows:
         return Text("(no data)", style="dim")
 
     max_fresh = max(r.fresh_tokens for r in rows) or 1
 
     result = Text()
-    # Header — leading "  " matches the per-row number prefix so columns align
     result.append(" " * _LABEL_W + "  " + " " * bar_width)
     result.append(
         f"  {'Input':>{_NUM_W}}  {'Cache Write':>{_NUM_W}}  {'Cache Read':>{_NUM_W}}  {'Out':>{_NUM_W}}",
@@ -241,7 +284,6 @@ def build_chart_bars(rows: list[BarRow], bar_width: int = 28, cursor: int = -1) 
                 used += chars
         if used < fresh_chars:
             bar.append("█" * (fresh_chars - used), style="dim")
-        # Pad to uniform bar_width so number columns stay aligned
         bar.append(" " * (bar_width - fresh_chars))
 
         label = _ljust_display(row.label[:_LABEL_W], _LABEL_W)
@@ -261,11 +303,6 @@ def build_chart_bars(rows: list[BarRow], bar_width: int = 28, cursor: int = -1) 
 
 
 class BarChart(Static):
-    """Focusable stacked bar chart. Up/Down moves cursor; Enter selects the row.
-
-    Subclasses Static so that height: auto correctly sizes to rendered content.
-    """
-
     can_focus = True
 
     DEFAULT_CSS = """
@@ -317,8 +354,6 @@ class BarChart(Static):
 
 
 class DetailPane(Widget):
-    """Right-pane widget: shows category breakdown + token totals for selected node."""
-
     DEFAULT_CSS = """
     DetailPane {
         layout: vertical;
@@ -376,7 +411,7 @@ class DetailPane(Widget):
 
     def on_mount(self) -> None:
         totals_table = self.query_one("#totals-table", DataTable)
-        totals_table.add_columns("", "Tokens")
+        totals_table.add_columns("Tokens")
 
     def _refresh_category_table(self, cat_totals: dict) -> None:
         total = sum(cat_totals.values()) or 1
@@ -396,17 +431,59 @@ class DetailPane(Widget):
         self.query_one("#chart-section", Vertical).display = False
         self.query_one("#message-section", VerticalScroll).display = False
 
-    def _refresh_totals(self, totals: TokenTotals) -> None:
+    def _refresh_totals(self, totals: TokenTotals, model: str = "", duration: float = 0.0) -> None:
         totals_table = self.query_one("#totals-table", DataTable)
-        totals_table.clear()
+        totals_table.clear(columns=True)
+        short = _short_model(model)
+        col_header = f"{short} Tokens" if model else "Tokens"
+        totals_table.add_columns(col_header)
         total_in = totals.input_tokens + totals.cache_read + totals.cache_create
         cache_pct = (totals.cache_read / total_in * 100) if total_in > 0 else 0.0
-        totals_table.add_row("Input (fresh)", f"{totals.input_tokens:,}")
-        totals_table.add_row("Cache write",   f"{totals.cache_create:,}")
-        totals_table.add_row("  5 min",       f"{totals.cache_create_5m:,}")
-        totals_table.add_row("  1 hour",      f"{totals.cache_create_1h:,}")
-        totals_table.add_row("Cache read",    f"{totals.cache_read:,}  ({cache_pct:.0f}% hit)")
-        totals_table.add_row("Output",        f"{totals.output:,}")
+        totals_table.add_row(f"{totals.input_tokens:,}",                     label="Input (fresh)")
+        totals_table.add_row(f"{totals.cache_create:,}",                     label="Cache write")
+        totals_table.add_row(f"{totals.cache_create_5m:,}",                  label="  5 min")
+        totals_table.add_row(f"{totals.cache_create_1h:,}",                  label="  1 hour")
+        totals_table.add_row(f"{totals.cache_read:,}  ({cache_pct:.0f}% hit)", label="Cache read")
+        totals_table.add_row(f"{totals.output:,}",                           label="Output")
+        totals_table.add_row(_fmt_duration(duration),                        label="Duration")
+
+    def _refresh_totals_multi(self, model_stats: dict[str, dict]) -> None:
+        totals_table = self.query_one("#totals-table", DataTable)
+        totals_table.clear(columns=True)
+        if not model_stats:
+            totals_table.add_columns("(no data)")
+            return
+        models = list(model_stats.keys())
+        totals_table.add_columns(*[_short_model(m) for m in models])
+
+        def _row(label: str, values) -> None:
+            totals_table.add_row(*values, label=label)
+
+        input_vals = [f"{model_stats[m]['input']:,}" for m in models]
+        _row("Input (fresh)", input_vals)
+
+        cache_create_vals = [f"{model_stats[m]['cache_create']:,}" for m in models]
+        _row("Cache write", cache_create_vals)
+
+        cache_create_5m_vals = [f"{model_stats[m]['cache_create_5m']:,}" for m in models]
+        _row("  5 min", cache_create_5m_vals)
+
+        cache_create_1h_vals = [f"{model_stats[m]['cache_create_1h']:,}" for m in models]
+        _row("  1 hour", cache_create_1h_vals)
+
+        cache_read_vals = []
+        for m in models:
+            d = model_stats[m]
+            total_in = d["input"] + d["cache_read"] + d["cache_create"]
+            hit_pct = (d["cache_read"] / total_in * 100) if total_in > 0 else 0.0
+            cache_read_vals.append(f"{d['cache_read']:,}  ({hit_pct:.0f}% hit)")
+        _row("Cache read", cache_read_vals)
+
+        output_vals = [f"{model_stats[m]['output']:,}" for m in models]
+        _row("Output", output_vals)
+
+        duration_vals = [_fmt_duration(model_stats[m]["duration"]) for m in models]
+        _row("Duration", duration_vals)
 
     def update(self, node) -> None:
         """Refresh for GlobalStats, ProjectStats, or SessionStats."""
@@ -429,10 +506,12 @@ class DetailPane(Widget):
             times_widget.update(f"Start: {start}   End: {end}")
             cat_totals = node.category_breakdown.category_totals()
             times_widget.display = True
+            self._refresh_category_table(cat_totals)
+            self._refresh_totals(_get_totals(node), model=node.model, duration=node.duration_seconds)
         else:
             cat_totals = node.category_totals()
-        self._refresh_category_table(cat_totals)
-        self._refresh_totals(_get_totals(node))
+            self._refresh_category_table(cat_totals)
+            self._refresh_totals_multi(_collect_model_stats(node))
 
         bar_rows = bar_rows_for(node)
         if bar_rows:
@@ -453,7 +532,7 @@ class DetailPane(Widget):
         times_widget.update(f"Start: {start}   End: {end}")
         times_widget.display = True
         self._refresh_category_table(exchange.category_breakdown.category_totals())
-        self._refresh_totals(_get_totals(exchange))
+        self._refresh_totals(_get_totals(exchange), model=exchange.model, duration=exchange.duration_seconds)
 
         # Show the human message, assistant response, and raw JSON
         msg_scroll = self.query_one("#message-section", VerticalScroll)
@@ -529,4 +608,4 @@ class DetailPane(Widget):
                 pct = (tokens / total * 100) if total > 0 else 0.0
                 cat_table.add_row(name, f"{tokens:,}", f"{pct:.1f}%")
 
-        self._refresh_totals(_get_totals(exchange))
+        self._refresh_totals(_get_totals(exchange), model=exchange.model, duration=exchange.duration_seconds)

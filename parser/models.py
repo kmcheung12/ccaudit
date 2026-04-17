@@ -1,5 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Optional
 
 
@@ -68,6 +69,7 @@ class ExchangeStats:
     jsonl_path: str = ""
     jsonl_line_start: int = 0
     jsonl_line_end: int = 0
+    model: str = ""
 
     @property
     def first_timestamp(self) -> str:
@@ -76,6 +78,19 @@ class ExchangeStats:
     @property
     def last_timestamp(self) -> str:
         return self.timestamp
+
+    @property
+    def duration_seconds(self) -> float:
+        t0 = self.first_timestamp
+        t1 = self.last_timestamp
+        if not t0 or not t1:
+            return 0.0
+        try:
+            dt0 = datetime.fromisoformat(t0.replace("Z", "+00:00"))
+            dt1 = datetime.fromisoformat(t1.replace("Z", "+00:00"))
+            return (dt1 - dt0).total_seconds()
+        except Exception:
+            return 0.0
 
 
 @dataclass

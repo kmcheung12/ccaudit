@@ -314,6 +314,13 @@ def load_session(jsonl_file: Path) -> SessionStats:
         assistant_text = _extract_assistant_text(final_content)
         human_text = _extract_human_text(human_content)
 
+        model = ""
+        for asst_msg in exchange["assistant_msgs"]:
+            m = asst_msg.get("message", {}).get("model", "")
+            if m and m != "<synthetic>":
+                model = m
+                break
+
         line_start = human_msg.get("_lineno", 0)
         line_end = exchange["assistant_msgs"][-1].get("_lineno", 0) if exchange["assistant_msgs"] else line_start
 
@@ -337,6 +344,7 @@ def load_session(jsonl_file: Path) -> SessionStats:
             jsonl_path=str(jsonl_file),
             jsonl_line_start=line_start,
             jsonl_line_end=line_end,
+            model=model,
         ))
 
     return SessionStats(
