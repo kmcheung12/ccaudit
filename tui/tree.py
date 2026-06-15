@@ -67,16 +67,26 @@ class StatsTree(Widget):
             )
             node.add_leaf("Loading...", data=None)
 
+    def _session_label(self, session) -> str:
+        ts = session.last_timestamp
+        ts_str = ts[:19].replace("T", " ") if ts else "no date"
+        label = f"🗂 {ts_str} {session.display_name}"
+        if not session.exchanges:
+            label += " (empty)"
+        return label
+
     def _populate_project_node_from_data(self, node: TreeNode, project: ProjectStats) -> None:
         """Render sessions for an already-loaded project (no disk I/O)."""
         if project.load_error:
             node.add_leaf(f"⚠ {project.load_error}", data=None)
             return
-        for session in project.sessions:
-            label = f"🗂 {session.display_name}"
-            if not session.exchanges:
-                label += " (empty)"
-            s_node = node.add(label, data=session, expand=False)
+        sorted_sessions = sorted(
+            project.sessions,
+            key=lambda s: s.last_timestamp or "",
+            reverse=True,
+        )
+        for session in sorted_sessions:
+            s_node = node.add(self._session_label(session), data=session, expand=False)
             if session.first_timestamp:
                 s_node.tooltip = session.first_timestamp[:19].replace("T", " ")
             for exchange in session.exchanges:
@@ -168,10 +178,7 @@ class StatsTree(Widget):
         session_node = self._find_node_by_data(tree.root, session)
         if session_node is None:
             return
-        label = f"🗂 {session.display_name}"
-        if not session.exchanges:
-            label += " (empty)"
-        session_node.label = label
+        session_node.label = self._session_label(session)
         existing_count = sum(
             1 for child in session_node.children
             if isinstance(child.data, ExchangeStats)
@@ -193,25 +200,11 @@ class StatsTree(Widget):
 
         No-ops if the project node is not currently expanded (the node will be
         rendered correctly the next time the user expands the project).
+        Rebuilds children to maintain anti-chronological order.
         """
         tree = self.query_one("#stats-tree", _NavTree)
         project_node = self._find_node_by_data(tree.root, project)
         if project_node is None or not project_node.is_expanded:
             return
-        label = f"🗂 {session.display_name}"
-        if not session.exchanges:
-            label += " (empty)"
-        s_node = project_node.add(label, data=session, expand=False)
-        if session.first_timestamp:
-            s_node.tooltip = session.first_timestamp[:19].replace("T", " ")
-        for exchange in session.exchanges:
-            prefix = "⚡" if exchange.after_compact else "↩"
-            t_node = s_node.add(
-                f"{prefix} exchange {exchange.exchange_number}",
-                data=exchange,
-                expand=False,
-            )
-            for cat_name, tokens in exchange.category_breakdown.category_totals().items():
-                if tokens == 0:
-                    continue
-                t_node.add_leaf(f"  {cat_name}: {tokens:,}", data=(exchange, cat_name))
+        project_node.remove_children()
+        self._populate_project_node_from_data(project_node, project)
