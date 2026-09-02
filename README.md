@@ -12,6 +12,7 @@ Both harnesses are merged by working directory: a project node is a code directo
 
 - [Getting Started](#getting-started)
 - [Session History Retention](#session-history-retention)
+- [Live Reload](#live-reload)
 - [How Sessions and Exchanges Are Stored](#how-sessions-and-exchanges-are-stored)
 - [What Is an Exchange?](#what-is-an-exchange)
 - [Top-Level Message Envelope](#top-level-message-envelope)
@@ -111,6 +112,24 @@ This has a practical cost. Rollout files store a `reasoning` item with an opaque
 ### What this means for cross-harness totals
 
 Because Claude's history is a rolling 30-day window while Codex's accumulates indefinitely, **merged project totals are not apples-to-apples** — you are comparing one month of Claude against your entire Codex history, and the skew widens over time. Use `--source` to compare a single harness against itself, and treat combined totals as indicative rather than exact.
+
+
+---
+
+## Live Reload
+
+ccaudit watches the log directories while it runs (macOS kqueue) and updates the tree and detail pane in place as sessions grow — no restart needed. This works for both harnesses.
+
+Claude Code is straightforward: each project directory is watched for new session files, and open sessions are watched for appends.
+
+Codex needs more care, because rollouts are filed by date rather than by project:
+
+- **Routing.** One day directory holds rollouts for many different working directories, so a newly appeared rollout is routed by reading its `session_meta` cwd and matching the slug — not by which directory it landed in.
+- **Day rollover.** The sessions root, year, and month directories are watched so that a new day directory appearing at midnight is picked up. Only the two newest day directories are watched for new files; older ones can no longer gain rollouts, and watching them would spend a file descriptor each for nothing.
+- **Mid-write files.** A rollout exists on disk before its first line is flushed, so a file whose cwd cannot yet be read is retried on its first write rather than dropped.
+- **Running exchanges.** A Codex exchange accumulates `token_count` deltas for as long as it runs, so the trailing exchange is refreshed in place rather than only new exchanges being appended.
+
+One limitation: a Codex rollout for a directory that had no sessions when ccaudit started is ignored rather than creating a new project node at runtime. Restart to pick it up.
 
 
 ---

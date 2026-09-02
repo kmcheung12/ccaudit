@@ -1,7 +1,15 @@
+import functools
 import json
+import runpy
+import sys
 import pytest
 from pathlib import Path
+import parser.loader
+from parser.loader import path_to_slug
+from tui.app import CCAuditApp
 from main import parse_args, resolve_projects
+
+MAIN_PY = str(Path(__file__).resolve().parent.parent / "main.py")
 
 
 def write_rollout(path: Path, cwd: str) -> None:
@@ -129,3 +137,151 @@ def test_resolve_dir_expands_user_and_resolves_relative_paths(dirs, monkeypatch,
     # but it must be resolved to an absolute slug rather than left as '.'.
     assert "'.'" not in error
     assert str(target) in error
+
+
+# -a / --all is currently a no-op flag ("not --dir"); pin that down.
+
+def test_all_flag_is_accepted_and_sets_dir_to_none():
+    for argv in ([], ["-a"], ["--all"]):
+        assert parse_args(argv).dir is None
+    assert parse_args([]).all is False
+    assert parse_args(["-a"]).all is True
+    assert parse_args(["--all"]).all is True
+
+
+@pytest.mark.parametrize("argv", [[], ["-a"], ["--all"]])
+def test_all_flag_produces_the_same_projects_as_no_flag(dirs, argv):
+    """-a, --all and no flag are behaviourally identical today."""
+    baseline, _ = resolve_projects("all", parse_args([]).dir, **dirs)
+    args = parse_args(argv)
+    projects, error = resolve_projects(args.source, args.dir, **dirs)
+    assert error is None
+    assert [p.project_slug for p in projects] == [p.project_slug for p in baseline]
+    assert len(projects) == 3
+
+
+# --dir path forms
+
+
+@pytest.fixture
+def real_dir_project(dirs, tmp_path):
+    """A Claude project whose slug corresponds to a directory that exists on disk.
+
+    Needed because --dir resolves the path against the real filesystem, so the
+    fixture's fake /Users/alan paths can't be reached via '.' or '~'.
+    """
+    home = (tmp_path / "home").resolve()
+    target = home / "code" / "realproj"
+    target.mkdir(parents=True)
+    slug = path_to_slug(target)
+    (dirs["projects_dir"] / slug).mkdir()
+    return {"home": home, "target": target, "slug": slug}
+
+
+def test_dir_accepts_absolute_path(dirs, real_dir_project):
+    projects, error = resolve_projects("all", str(real_dir_project["target"]), **dirs)
+    assert error is None
+    assert [p.project_slug for p in projects] == [real_dir_project["slug"]]
+
+
+def test_dir_accepts_relative_dot_path(dirs, real_dir_project, monkeypatch):
+    monkeypatch.chdir(real_dir_project["target"])
+    projects, error = resolve_projects("all", ".", **dirs)
+    assert error is None
+    assert [p.project_slug for p in projects] == [real_dir_project["slug"]]
+
+
+def test_dir_accepts_tilde_prefixed_path(dirs, real_dir_project, monkeypatch):
+    monkeypatch.setenv("HOME", str(real_dir_project["home"]))
+    projects, error = resolve_projects("all", "~/code/realproj", **dirs)
+    assert error is None
+    assert [p.project_slug for p in projects] == [real_dir_project["slug"]]
+
+
+def test_dir_accepts_trailing_slash(dirs, real_dir_project):
+    projects, error = resolve_projects("all", str(real_dir_project["target"]) + "/", **dirs)
+    assert error is None
+    assert [p.project_slug for p in projects] == [real_dir_project["slug"]]
+
+
+# __main__ wiring — drive the real module end to end
+
+
+@pytest.fixture
+def run_main(monkeypatch, capsys, dirs):
+    """Execute main.py as __main__ with isolated discovery dirs and a stubbed App.run.
+
+    list_projects' directory arguments are *default parameter values*, bound when
+    parser.loader was defined, so patching PROJECTS_DIR / CODEX_SESSIONS_DIR has
+    no effect. Binding the fixture dirs onto the function itself does.
+    """
+    calls = []
+
+    def fake_run(self, *args, **kwargs):
+        calls.append(self._global.projects)
+
+    monkeypatch.setattr(CCAuditApp, "run", fake_run)
+    monkeypatch.setattr(
+        parser.loader, "list_projects",
+        functools.partial(parser.loader.list_projects, **dirs),
+    )
+
+    def _run(argv):
+        monkeypatch.setattr(sys, "argv", ["main.py", *argv])
+        calls.clear()
+        capsys.readouterr()
+        code = 0
+        try:
+            runpy.run_path(MAIN_PY, run_name="__main__")
+        except SystemExit as exc:
+            code = exc.code if exc.code is not None else 0
+        captured = capsys.readouterr()
+        return code, captured, calls
+
+    return _run
+
+
+def test_main_runs_the_app_with_the_resolved_projects(run_main):
+    code, captured, calls = run_main([])
+    assert code == 0
+    assert captured.err == ""
+    assert len(calls) == 1
+    # Only the fixture dirs could produce exactly these three slugs.
+    assert sorted(p.project_slug for p in calls[0]) == ["-Users-alan-code-both",
+                                                        "-Users-alan-code-claudeonly",
+                                                        "-Users-alan-code-codexonly"]
+
+
+@pytest.mark.parametrize("source,expected", [
+    ("all", ["-Users-alan-code-both", "-Users-alan-code-claudeonly",
+             "-Users-alan-code-codexonly"]),
+    ("claude", ["-Users-alan-code-both", "-Users-alan-code-claudeonly"]),
+    ("codex", ["-Users-alan-code-both", "-Users-alan-code-codexonly"]),
+])
+def test_main_honours_every_source_value(run_main, source, expected):
+    code, captured, calls = run_main(["-s", source])
+    assert code == 0
+    assert captured.err == ""
+    assert sorted(p.project_slug for p in calls[0]) == expected
+
+
+def test_main_narrows_to_a_single_project_with_dir(run_main):
+    code, captured, calls = run_main(["-d", "/Users/alan/code/both"])
+    assert code == 0
+    assert [p.project_slug for p in calls[0]] == ["-Users-alan-code-both"]
+
+
+def test_main_exits_1_and_prints_error_to_stderr_when_dir_matches_nothing(run_main):
+    code, captured, calls = run_main(["-d", "/Users/alan/code/nope"])
+    assert code == 1
+    assert calls == []          # the app is never constructed or run
+    assert captured.out == ""
+    assert "no project found" in captured.err
+    assert "-Users-alan-code-nope" in captured.err
+
+
+def test_main_exits_2_on_bad_arguments(run_main):
+    code, captured, calls = run_main(["-s", "bogus"])
+    assert code == 2
+    assert calls == []
+    assert "invalid choice" in captured.err

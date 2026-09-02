@@ -25,6 +25,11 @@ class _NavTree(Tree):
         Binding("left", "go_to_parent", "Go to parent", show=False),
     ]
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Tighten indent guides (default 4) so deep labels keep more room for text.
+        self.guide_depth = 2
+
     def action_go_to_parent(self) -> None:
         node = self.cursor_node
         if node is None:
@@ -40,9 +45,18 @@ class _NavTree(Tree):
 class StatsTree(Widget):
     """Left-pane tree widget."""
 
+    # Widest label the tree must show without truncation is a Codex subagent
+    # session at depth 2: indent guides + expand arrow + "🗂 <MM-DD HH:MM> "
+    # + "<8-char id> ⤷<agent name>". PANE_WIDTH is sized (and regression-tested
+    # in tests/test_tree.py) so that label fits, scrollbar included. Every cell
+    # spent here is taken from the detail pane, which is the tighter of the two
+    # on an 80-column terminal — so the label is kept short rather than the
+    # pane made wide.
+    PANE_WIDTH = 41
+
     DEFAULT_CSS = """
     StatsTree {
-        width: 35;
+        width: 41;
         border-right: solid $panel;
     }
     """
@@ -69,11 +83,38 @@ class StatsTree(Widget):
 
     def _session_label(self, session) -> str:
         ts = session.last_timestamp
-        ts_str = ts[:19].replace("T", " ") if ts else "no date"
+        # Month-day and minute precision only. The year and seconds cost 8 cells
+        # between them and are never used for scanning; sessions are already
+        # sorted newest-first. Full precision lives in the node tooltip.
+        ts_str = ts[5:16].replace("T", " ") if ts else "no date"
         label = f"🗂 {ts_str} {session.display_name}"
         if not session.exchanges:
             label += " (empty)"
         return label
+
+    def _session_tooltip(self, session) -> str | None:
+        """Full-precision timestamps, so sessions in the same minute stay distinguishable."""
+        parts = []
+        if session.first_timestamp:
+            parts.append(f"first: {session.first_timestamp[:19].replace('T', ' ')}")
+        if session.last_timestamp:
+            parts.append(f"last: {session.last_timestamp[:19].replace('T', ' ')}")
+        return "\n".join(parts) if parts else None
+
+    def _add_exchange_node(self, parent: TreeNode, exchange: ExchangeStats) -> TreeNode:
+        """Add an exchange node with one leaf per non-zero category."""
+        prefix = "⚡" if exchange.after_compact else "↩"
+        t_node = parent.add(
+            f"{prefix} exchange {exchange.exchange_number}", data=exchange, expand=False
+        )
+        self._populate_exchange_leaves(t_node, exchange)
+        return t_node
+
+    def _populate_exchange_leaves(self, node: TreeNode, exchange: ExchangeStats) -> None:
+        for cat_name, tokens in exchange.category_breakdown.category_totals().items():
+            if tokens == 0:
+                continue
+            node.add_leaf(f"  {cat_name}: {tokens:,}", data=(exchange, cat_name))
 
     def _populate_project_node_from_data(self, node: TreeNode, project: ProjectStats) -> None:
         """Render sessions for an already-loaded project (no disk I/O)."""
@@ -87,17 +128,9 @@ class StatsTree(Widget):
         )
         for session in sorted_sessions:
             s_node = node.add(self._session_label(session), data=session, expand=False)
-            if session.first_timestamp:
-                s_node.tooltip = session.first_timestamp[:19].replace("T", " ")
+            s_node.tooltip = self._session_tooltip(session)
             for exchange in session.exchanges:
-                prefix = "⚡" if exchange.after_compact else "↩"
-                t_node = s_node.add(
-                    f"{prefix} exchange {exchange.exchange_number}", data=exchange, expand=False
-                )
-                for cat_name, tokens in exchange.category_breakdown.category_totals().items():
-                    if tokens == 0:
-                        continue
-                    t_node.add_leaf(f"  {cat_name}: {tokens:,}", data=(exchange, cat_name))
+                self._add_exchange_node(s_node, exchange)
 
     def _populate_project_node(self, node: TreeNode, project: ProjectStats) -> None:
         """Load project from disk and populate node."""
@@ -169,31 +202,29 @@ class StatsTree(Widget):
         self._add_project_nodes(tree.root, matching)
 
     def refresh_session_node(self, session) -> None:
-        """Update tree after new exchanges were appended to `session` in-place.
+        """Update tree after `session` was updated in-place.
 
-        Updates the session node label. If the session node is expanded,
-        appends tree nodes for exchanges beyond the previously rendered count.
+        Updates the session node label and tooltip, re-renders the category
+        leaves of the trailing exchange (whose totals grow while it is still
+        running), then appends nodes for exchanges beyond the rendered count.
         """
         tree = self.query_one("#stats-tree", _NavTree)
         session_node = self._find_node_by_data(tree.root, session)
         if session_node is None:
             return
         session_node.label = self._session_label(session)
-        existing_count = sum(
-            1 for child in session_node.children
+        session_node.tooltip = self._session_tooltip(session)
+        rendered = [
+            child for child in session_node.children
             if isinstance(child.data, ExchangeStats)
-        )
-        for exchange in session.exchanges[existing_count:]:
-            prefix = "⚡" if exchange.after_compact else "↩"
-            t_node = session_node.add(
-                f"{prefix} exchange {exchange.exchange_number}",
-                data=exchange,
-                expand=False,
-            )
-            for cat_name, tokens in exchange.category_breakdown.category_totals().items():
-                if tokens == 0:
-                    continue
-                t_node.add_leaf(f"  {cat_name}: {tokens:,}", data=(exchange, cat_name))
+        ]
+        # Only the last rendered exchange can still be accumulating tokens.
+        if rendered:
+            last_node = rendered[-1]
+            last_node.remove_children()
+            self._populate_exchange_leaves(last_node, last_node.data)
+        for exchange in session.exchanges[len(rendered):]:
+            self._add_exchange_node(session_node, exchange)
 
     def add_session_node(self, project, session) -> None:
         """Insert a new session node under an already-expanded project node.

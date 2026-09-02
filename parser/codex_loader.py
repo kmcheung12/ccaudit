@@ -34,15 +34,20 @@ def list_codex_sessions(sessions_dir: Path = CODEX_SESSIONS_DIR) -> dict[str, li
         return {}
     by_slug: dict[str, list[Path]] = {}
     for jsonl_file in sorted(sessions_dir.rglob("rollout-*.jsonl")):
-        cwd = _read_session_cwd(jsonl_file)
+        cwd = read_session_cwd(jsonl_file)
         if not cwd:
             continue
         by_slug.setdefault(path_to_slug(Path(cwd)), []).append(jsonl_file)
     return by_slug
 
 
-def _read_session_cwd(jsonl_file: Path) -> str:
-    """Return `payload.cwd` from a rollout's session_meta line, or "" if unreadable."""
+def read_session_cwd(jsonl_file: Path) -> str:
+    """Return `payload.cwd` from a rollout's session_meta line, or "" if unreadable.
+
+    Public because live reload routes a newly created rollout to a project the
+    same way discovery does — a rollout that is still mid-write simply yields ""
+    and is retried later.
+    """
     try:
         with open(jsonl_file, encoding="utf-8") as f:
             first_line = f.readline().strip()

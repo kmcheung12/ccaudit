@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json
+from dataclasses import fields
 from pathlib import Path
 from parser.models import ProjectStats, SessionStats, ExchangeStats, CategoryBreakdown
 from parser import categorizer
@@ -393,15 +394,41 @@ def load_session(jsonl_file: Path) -> SessionStats:
     )
 
 
-def apply_session_updates(existing: SessionStats, updated: SessionStats) -> int:
-    """Append new exchanges from `updated` to `existing` in-place.
+def _refresh_exchange(existing: ExchangeStats, updated: ExchangeStats) -> bool:
+    """Copy `updated`'s fields onto `existing` in-place. Returns True if anything changed.
 
-    Returns the number of new exchanges added. Mutates `existing` directly
-    so all existing references to the object remain valid.
+    Mutates rather than replaces so tree nodes and the detail pane, which hold
+    the ExchangeStats object itself, keep pointing at live data.
+    """
+    changed = False
+    for f in fields(ExchangeStats):
+        new_value = getattr(updated, f.name)
+        if getattr(existing, f.name) != new_value:
+            setattr(existing, f.name, new_value)
+            changed = True
+    return changed
+
+
+def apply_session_updates(existing: SessionStats, updated: SessionStats) -> int:
+    """Merge `updated` into `existing` in-place.
+
+    Appends exchanges that are new, and refreshes the last previously-known
+    exchange, which may have grown since it was parsed: an in-progress exchange
+    keeps accumulating tokens (Codex emits `token_count` deltas throughout a
+    turn), so appending alone leaves the newest exchange showing stale totals
+    until the next one starts.
+
+    Returns the number of exchanges added or refreshed. Mutates `existing`
+    directly so all existing references to it remain valid.
     """
     old_count = len(existing.exchanges)
     new_count = len(updated.exchanges)
-    if new_count <= old_count:
-        return 0
+    if new_count < old_count:
+        return 0  # file was truncated or rewritten — leave what we have alone
+    refreshed = 0
+    if old_count and _refresh_exchange(
+        existing.exchanges[old_count - 1], updated.exchanges[old_count - 1]
+    ):
+        refreshed = 1
     existing.exchanges.extend(updated.exchanges[old_count:])
-    return new_count - old_count
+    return refreshed + new_count - old_count

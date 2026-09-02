@@ -70,6 +70,46 @@ def test_apply_session_updates_appends_new_exchanges():
         assert added == 1
         assert len(session.exchanges) == 2
 
+def test_apply_session_updates_refreshes_a_grown_trailing_exchange():
+    """An in-progress exchange keeps accumulating tokens — refresh it, don't just append."""
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "abc123.jsonl"
+        msgs = _minimal_session_messages()
+        _write_jsonl(p, msgs)
+        session = load_session(p)
+        exchange = session.exchanges[0]
+        assert exchange.output_tokens == 5
+
+        # Same exchange, one more assistant turn inside it
+        msgs.append({
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": "more",
+                "usage": {"input_tokens": 20, "cache_read_input_tokens": 0,
+                          "cache_creation_input_tokens": 0, "output_tokens": 7},
+            },
+            "timestamp": "2026-04-14T10:00:02Z",
+            "uuid": "bbb2",
+        })
+        _write_jsonl(p, msgs)
+        changed = apply_session_updates(session, load_session(p))
+        assert changed == 1
+        assert len(session.exchanges) == 1
+        assert session.exchanges[0] is exchange  # mutated in place, not replaced
+        # _group_exchanges keeps the newest assistant message as the closing one
+        assert exchange.output_tokens == 7
+        assert exchange.input_tokens == 20
+
+def test_apply_session_updates_ignores_a_shrunken_file():
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "abc123.jsonl"
+        _write_jsonl(p, _minimal_session_messages())
+        session = load_session(p)
+        _write_jsonl(p, [])
+        assert apply_session_updates(session, load_session(p)) == 0
+        assert len(session.exchanges) == 1
+
 def test_apply_session_updates_no_change():
     with tempfile.TemporaryDirectory() as d:
         p = Path(d) / "abc123.jsonl"
