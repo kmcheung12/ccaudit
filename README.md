@@ -1,6 +1,8 @@
-# ccaudit — Claude Code Token Usage Explorer
+# ccaudit — Coding Agent Token Usage Explorer
 
-ccaudit is a terminal UI for exploring how Claude Code spends your token budget. It reads the JSONL session logs that Claude Code writes to `~/.claude/projects/` and breaks down token usage by session, exchange, and content category.
+ccaudit is a terminal UI for exploring how your coding agents spend their token budget. It reads the JSONL session logs written by **Claude Code** (`~/.claude/projects/`) and **OpenAI Codex CLI** (`~/.codex/sessions/`), and breaks down token usage by session, exchange, and content category.
+
+Both harnesses are merged by working directory: a project node is a code directory, and the sessions under it come from whichever agents you ran there. Each exchange records its own model, so a directory you have worked in with both tools shows `claude-opus-5` and `gpt-5.6-sol` sessions side by side.
 
 ![ccaudit screenshot](screenshot.png)
 
@@ -9,12 +11,14 @@ ccaudit is a terminal UI for exploring how Claude Code spends your token budget.
 ## Contents
 
 - [Getting Started](#getting-started)
+- [Session History Retention](#session-history-retention)
 - [How Sessions and Exchanges Are Stored](#how-sessions-and-exchanges-are-stored)
 - [What Is an Exchange?](#what-is-an-exchange)
 - [Top-Level Message Envelope](#top-level-message-envelope)
 - [User Message](#user-message)
 - [Assistant Message](#assistant-message)
 - [System Message — Compact Boundary](#system-message--compact-boundary)
+- [Codex Rollout Format](#codex-rollout-format)
 - [Token Categories](#token-categories)
 - [Parsed Data Model](#parsed-data-model)
   - [Model Attribution](#model-attribution)
@@ -50,10 +54,11 @@ python main.py
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `-a`, `--all` | Yes | Read all Claude projects from `~/.claude/projects/` |
-| `-d PATH`, `--dir PATH` | — | Show only the project that corresponds to the code directory at `PATH`. Looks up the matching project in `~/.claude/projects/` by slug; does not read JSONL files from `PATH` itself. |
+| `-a`, `--all` | Yes | Read all projects from every enabled source |
+| `-d PATH`, `--dir PATH` | — | Show only the project that corresponds to the code directory at `PATH`. Looks up the matching project by slug; does not read JSONL files from `PATH` itself. |
+| `-s`, `--source {claude,codex,all}` | `all` | Which harness logs to read |
 
-`-a` and `-d` are mutually exclusive. If neither is given, `--all` is the default.
+`-a` and `-d` are mutually exclusive. If neither is given, `--all` is the default. `-s` composes with both.
 
 **Example — view only the current project:**
 ```bash
@@ -61,14 +66,60 @@ python main.py -d .
 python main.py -d ~/code/myproject
 ```
 
+**Example — audit one harness at a time:**
+```bash
+python main.py -s codex             # Codex sessions only
+python main.py -s claude -d .       # Claude sessions for the current directory
+```
+
+
+---
+
+## Session History Retention
+
+**The two harnesses have opposite retention behaviour, and it materially affects what ccaudit can show you.**
+
+| | Claude Code | Codex CLI |
+|---|---|---|
+| Automatic cleanup | Yes — 30 days by default | **None** |
+| Setting | `cleanupPeriodDays` in `~/.claude/settings.json` | No equivalent |
+| When it runs | On launch, against each transcript's last-modified time | Never |
+| Manual deletion | Delete files under `~/.claude/projects/` | `codex delete` / `codex archive` |
+
+### Claude Code deletes old transcripts silently
+
+Claude Code removes session transcripts whose last-modified time is older than `cleanupPeriodDays`. The default is **30 days**, applied whenever the setting is absent — which means the default is easy to be subject to without ever having seen it. To keep more history:
+
+```json
+// ~/.claude/settings.json
+{ "cleanupPeriodDays": 90 }
+```
+
+There is no "never" value, but a large number works in practice. **Anything already past the cutoff is gone and cannot be recovered** — the token usage in those sessions is unrecoverable, since the JSONL is the only record ccaudit reads.
+
+### Codex keeps everything, forever
+
+Codex CLI has no retention policy, no cleanup setting, and no expiry. Every session since installation is still on disk. Deletion is manual only:
+
+```bash
+codex delete <id|name>      # permanently delete a saved session
+codex archive <id|name>     # archive instead (reversible via codex unarchive)
+```
+
+This has a practical cost. Rollout files store a `reasoning` item with an opaque `encrypted_content` blob on every turn, so a single long session can reach **10–15 MB**, and the directory grows without bound.
+
+### What this means for cross-harness totals
+
+Because Claude's history is a rolling 30-day window while Codex's accumulates indefinitely, **merged project totals are not apples-to-apples** — you are comparing one month of Claude against your entire Codex history, and the skew widens over time. Use `--source` to compare a single harness against itself, and treat combined totals as indicative rather than exact.
+
 
 ---
 
 ## How Sessions and Exchanges Are Stored
 
-Claude Code records every API call to disk as a JSONL file. Each line is one raw API message — a user message, an assistant message, or a system event.
+Both harnesses record every API call to disk as a JSONL file, one JSON object per line. Blank and malformed lines are skipped. The two layouts differ:
 
-### Storage Layout
+### Claude Code Storage Layout
 
 ```
 ~/.claude/projects/
@@ -80,7 +131,17 @@ Claude Code records every API call to disk as a JSONL file. Each line is one raw
 
 - **Project slug**: a filesystem-safe encoding of the working directory path. Forward slashes are replaced with hyphens, with a leading hyphen. Example: `/Users/alan/code/myproject` → `-Users-alan-code-myproject`.
 - **Session ID**: a UUID identifying one continuous Claude Code session. The JSONL filename stem is the session ID.
-- **JSONL**: one JSON object per line; blank lines and malformed lines are skipped.
+
+### Codex Storage Layout
+
+```
+~/.codex/sessions/
+  <YYYY>/<MM>/<DD>/
+    rollout-<ISO-timestamp>-<thread-id>.jsonl
+    ...
+```
+
+Codex organises by **date, not by project**. The working directory is recorded inside the file, on the `session_meta` line (`payload.cwd`). ccaudit reads only the first line of each rollout to discover that directory, converts it to the same slug format Claude Code uses, and merges the session into the matching project node — so one project node can contain sessions from both harnesses.
 
 
 ---
@@ -291,9 +352,62 @@ The first exchange after a compact boundary is tagged `after_compact = true` in 
 
 ---
 
+## Codex Rollout Format
+
+Codex rollout files use a different envelope from Claude Code. Every line is `{"timestamp", "type", "payload"}`, where `type` selects the payload shape.
+
+| Line | Meaning |
+|---|---|
+| `session_meta` | First line. `payload.id` (unique per file), `payload.session_id` (thread **group** id), `payload.cwd`, `payload.thread_source`, `payload.source` |
+| `turn_context` | Per turn. `payload.model` (e.g. `gpt-5.6-sol`), `payload.cwd`, `payload.turn_id` |
+| `event_msg` / `user_message` | The human prompt. **Exchange boundary.** |
+| `event_msg` / `agent_message` | Assistant visible text |
+| `event_msg` / `token_count` | `payload.info.total_token_usage` (cumulative) and `last_token_usage` (per request) |
+| `event_msg` / `context_compacted`, `compacted` | Compaction boundary |
+| `response_item` / `message` | `role` ∈ `user` / `assistant` / `developer` |
+| `response_item` / `reasoning` | `summary[]` plus an opaque `encrypted_content` blob |
+| `response_item` / `custom_tool_call` (+ `_output`) | Tool call — `name`, `call_id`, `input` string |
+| `response_item` / `function_call` (+ `_output`) | Tool call — `name`, `arguments` JSON string |
+
+### Token Accounting Differences
+
+Two properties of the Codex format differ from Anthropic's and are easy to get wrong:
+
+**1. `input_tokens` includes cached tokens.** Anthropic reports `input_tokens` and `cache_read_input_tokens` as disjoint quantities; Codex's `input_tokens` is the total, with `cached_input_tokens` a subset of it. Fresh input is therefore `input_tokens − cached_input_tokens`.
+
+**2. Cumulative snapshots must be differenced, not summed.** `token_count` events are sometimes emitted more than once with an identical `total_token_usage` snapshot. Naively summing `last_token_usage` over a session overcounts — on one real session by 0.2% (30,741,453 against an authoritative total of 30,674,711). ccaudit instead derives each request's usage from the **delta between consecutive cumulative `total_token_usage` snapshots**, which is exact by construction; a zero delta identifies a duplicate event and is discarded.
+
+Each rollout file carries its own independent cumulative counter starting near zero, so files never double-count each other.
+
+Field mapping onto ccaudit's model:
+
+| `ExchangeStats` field | Codex source |
+|---|---|
+| `input_tokens` | Σ delta(`input_tokens`) − delta(`cached_input_tokens`) |
+| `cache_read_tokens` | Σ delta(`cached_input_tokens`) |
+| `cache_create_tokens` | Σ delta(`cache_write_input_tokens`) |
+| `output_tokens` | Σ delta(`output_tokens`) — includes reasoning |
+| `reasoning_output_tokens` | Σ delta(`reasoning_output_tokens`) |
+| `cache_create_5m_tokens`, `cache_create_1h_tokens` | Always 0 — no Codex equivalent |
+| `model` | Nearest preceding `turn_context.payload.model` |
+
+### Subagent Threads
+
+**`payload.session_id` is not unique.** It identifies a thread *group*: a parent session and the subagents it spawns all share one `session_id`, each writing its own rollout file. `payload.id` is the per-file identifier, and it is the one ccaudit uses as `session_id`.
+
+The `session_meta` line distinguishes them:
+
+- `thread_source: "user"` — a session you started; `source` is `"cli"`
+- `thread_source: "subagent"` — spawned automatically; `source` is `{"subagent": {"other": "guardian"}}` or `{"subagent": "review"}`
+
+Subagent sessions are displayed with their name appended (`01a0614d ⤷guardian`) and keep their own full category breakdown rather than being folded into the parent. This matters because subagent spend is not marginal: **`guardian`** — the reviewer Codex invokes to assess each planned action for risk — re-reads the transcript on every invocation to emit a small verdict, and can account for a substantial share of fresh input tokens while producing almost no output.
+
+
+---
+
 ## Token Categories
 
-ccaudit classifies each exchange's fresh token budget across six categories by inspecting content blocks structurally, then attributing tokens proportionally to character counts.
+ccaudit classifies each exchange's fresh token budget across seven categories by inspecting content blocks structurally, then attributing tokens proportionally to character counts. Both harnesses map onto the same categories.
 
 ### Category Definitions
 
@@ -303,8 +417,24 @@ ccaudit classifies each exchange's fresh token budget across six categories by i
 | **Tools** | Built-in Claude Code tool calls and their results — file reads, shell commands, searches, web fetches, etc. | `tool_use` blocks (assistant) for non-MCP, non-Agent tools; matching `tool_result` blocks (user) |
 | **MCP** | MCP (Model Context Protocol) server tool calls and their results | `tool_use` blocks (assistant) whose name starts with `mcp__`; matching `tool_result` blocks (user) |
 | **Agents** | Subagent dispatch — calls to the `Agent` tool that spin up a subprocess | `tool_use` blocks (assistant) with `name == "Agent"` |
-| **Messages** | The actual human-to-Claude conversation: what you typed and what Claude wrote back | The last `text` block in user content (the human's message); all `text` blocks in assistant content |
+| **Messages** | The actual human-to-assistant conversation: what you typed and what the model wrote back | The last `text` block in user content (the human's message); all `text` blocks in assistant content |
+| **Reasoning** | Extended thinking / reasoning content occupying context | `thinking` and `redacted_thinking` blocks (Claude); `reasoning` items — `summary` plus `encrypted_content` — (Codex) |
 | **Other** | Invisible overhead not present in the JSONL — see below | Fresh tokens remaining after attributing all visible characters |
+
+### Codex Category Mapping
+
+Codex has no equivalent of Claude Code's skill injection, so **Skills is always 0** for Codex sessions. Otherwise:
+
+| Category | Codex source |
+|---|---|
+| **Messages** | `user_message`, `agent_message`, and `message` items with role `user` or `assistant` |
+| **Reasoning** | `reasoning` items (`summary` + `encrypted_content` length) |
+| **Tools** | `custom_tool_call` / `function_call` and their `_output` counterparts — observed names include `exec`, `apply_patch`, `update_plan`, `view_image` |
+| **MCP** | Tool calls whose name matches the MCP naming convention |
+| **Agents** | Sub-agent spawn tools |
+| **Other** | `message` items with role `developer` (permissions, base instructions), plus invisible overhead |
+
+Note that Codex subagent work does **not** appear under Agents — subagents write their own rollout files and surface as separate sessions (see [Subagent Threads](#subagent-threads)).
 
 ### What "Other" Represents
 
@@ -352,6 +482,7 @@ One complete human-to-assistant exchange, including all intermediate tool round-
 | `cache_create_5m_tokens` | `int` | Sum of `usage.cache_creation.ephemeral_5m_input_tokens` |
 | `cache_create_1h_tokens` | `int` | Sum of `usage.cache_creation.ephemeral_1h_input_tokens` |
 | `output_tokens` | `int` | Sum of `usage.output_tokens` |
+| `reasoning_output_tokens` | `int` | Reasoning tokens within `output_tokens`. Codex only; always 0 for Claude, which does not report it separately |
 | `category_breakdown` | `CategoryBreakdown` | Per-category token estimates |
 | `after_compact` | `bool` | `True` if the human message immediately followed a compact boundary |
 | `user_text` | `str` | Last text block of user content that isn't injected context (≤800 chars) |
@@ -373,26 +504,28 @@ The `model` field is populated from `message.model` on the first assistant messa
 
 ### SessionStats
 
-One Claude Code session (one JSONL file).
+One session (one JSONL file), from either harness.
 
 | Field | Meaning |
 |---|---|
-| `session_id` | UUID from the filename stem |
-| `display_name` | First 8 characters of the session ID |
+| `session_id` | Claude: UUID from the filename stem. Codex: `session_meta.payload.id` — **not** `session_id`, which is shared across a thread group |
+| `display_name` | First 8 characters of the session ID, with `⤷<name>` appended for Codex subagent threads |
 | `first_timestamp` | Timestamp of the first message in the file |
 | `exchanges` | Ordered list of `ExchangeStats` |
 
 ### ProjectStats
 
-One project directory under `~/.claude/projects/`.
+One code directory, holding sessions from every harness used in it.
 
 | Field | Meaning |
 |---|---|
-| `project_slug` | Raw directory name (e.g. `-Users-alan-code-myproject`) |
+| `project_slug` | Slug form of the directory path (e.g. `-Users-alan-code-myproject`). The merge key across both harnesses |
 | `display_name` | Human-readable name: the portion of the slug after the 3rd hyphen-separated path component |
-| `sessions` | List of `SessionStats` |
+| `sessions` | List of `SessionStats`, interleaved from both sources and sorted by recency in the tree |
+| `claude_dir` | Absolute path to the `~/.claude/projects/<slug>/` directory, or `None` for a Codex-only project |
+| `codex_files` | Absolute paths to the Codex rollout files for this directory; empty for a Claude-only project |
 | `loaded` | `False` until `load_project()` is called (lazy loading) |
-| `load_error` | Set to an error string if loading fails; `None` otherwise |
+| `load_error` | Set to an error string if loading fails; `None` otherwise. Per-file failures are isolated, so one corrupt rollout does not hide a project's other sessions |
 
 
 ---
@@ -410,6 +543,13 @@ The fields documented here come from two distinct sources:
 - Envelope fields: `uuid`, `parentUuid`, `requestId`, `timestamp`
 - System message fields: `subtype`, `compactMetadata`
 - `requestId` corresponds to the `x-request-id` response header from the API, recorded by Claude Code for traceability.
+
+**Codex CLI private format** — not in OpenAI's API docs; written by Codex CLI when it persists rollouts to disk:
+- Envelope fields: `type`, `payload`, `timestamp`
+- `session_meta` fields: `id`, `session_id`, `cwd`, `thread_source`, `source`
+- `token_count` accounting: `total_token_usage`, `last_token_usage`, `cached_input_tokens`, `cache_write_input_tokens`, `reasoning_output_tokens`
+
+The Codex fields documented here were derived by inspecting real rollout files from codex-cli 0.145.0; they are not a published schema and may change between releases. The loader is written defensively — unknown line types, malformed JSON, and unexpected `source` shapes are skipped or degraded rather than raising.
 
 The JSONL format as a whole is Claude Code's own storage format and is not officially documented by Anthropic.
 

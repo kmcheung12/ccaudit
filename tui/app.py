@@ -7,7 +7,7 @@ from textual.containers import Horizontal, Vertical
 from textual.binding import Binding
 from textual import events
 from parser.models import GlobalStats, ProjectStats, SessionStats, ExchangeStats
-from parser.loader import PROJECTS_DIR, load_session, apply_session_updates
+from parser.loader import load_session, apply_session_updates
 from tui.tree import StatsTree, NodeSelected
 from tui.detail import DetailPane
 from tui.watcher import FileWatcher, latest_jsonl_path, find_session_by_path
@@ -65,10 +65,10 @@ class CCAuditApp(App):
             on_dir_changed=lambda p: self.call_from_thread(self._on_dir_changed, p),
         )
         for project in self._global.projects:
-            base = Path(project.projects_dir) if project.projects_dir else PROJECTS_DIR
-            project_dir = base / project.project_slug
-            if project_dir.is_dir():
-                self._watcher.watch_dir(str(project_dir))
+            if not project.claude_dir:
+                continue  # Codex-only project has no Claude directory to watch
+            if Path(project.claude_dir).is_dir():
+                self._watcher.watch_dir(project.claude_dir)
         self._watch_latest()
         self._watcher.start()
 
@@ -113,8 +113,7 @@ class CCAuditApp(App):
         """Called on the Textual thread when a watched directory gets a new JSONL file."""
         project = None
         for p in self._global.projects:
-            base = Path(p.projects_dir) if p.projects_dir else PROJECTS_DIR
-            if str(base / p.project_slug) == dir_path:
+            if p.claude_dir and p.claude_dir == dir_path:
                 project = p
                 break
         if project is None or not project.loaded:

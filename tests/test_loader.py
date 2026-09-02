@@ -1,7 +1,7 @@
 import json
 import pytest
 from pathlib import Path
-from parser.loader import slug_to_display, load_session, list_projects
+from parser.loader import slug_to_display, load_session, list_projects, load_project
 from parser.models import ProjectStats
 
 
@@ -120,15 +120,177 @@ def test_load_session_skips_assistant_without_usage(tmp_path):
 
 # list_projects
 
+def write_rollout(sessions_dir: Path, name: str, cwd: str, lines: list[dict] | None = None) -> Path:
+    """Write a minimal Codex rollout file under sessions_dir/2026/01/01/."""
+    day_dir = sessions_dir / "2026" / "01" / "01"
+    day_dir.mkdir(parents=True, exist_ok=True)
+    f = day_dir / f"rollout-{name}.jsonl"
+    records = [{
+        "timestamp": "2026-01-01T00:00:00Z",
+        "type": "session_meta",
+        "payload": {"session_id": name, "cwd": cwd},
+    }]
+    records.extend(lines or [])
+    write_jsonl(f, records)
+    return f
+
+
 def test_list_projects(tmp_path):
     (tmp_path / "-Users-alice-code-alpha").mkdir()
     (tmp_path / "-Users-alice-code-beta").mkdir()
-    projects = list_projects(tmp_path)
+    projects = list_projects(tmp_path, codex_sessions_dir=tmp_path / "nope")
     names = [p.display_name for p in projects]
     assert "alpha" in names
     assert "beta" in names
     for p in projects:
         assert not p.loaded
+        assert p.claude_dir == str(tmp_path / p.project_slug)
+        assert p.codex_files == []
+
+
+def test_list_projects_merges_codex_into_matching_claude_project(tmp_path):
+    projects_dir = tmp_path / "projects"
+    projects_dir.mkdir()
+    (projects_dir / "-Users-alice-code-alpha").mkdir()
+    sessions_dir = tmp_path / "codex"
+    rollout = write_rollout(sessions_dir, "r1", "/Users/alice/code/alpha")
+
+    projects = list_projects(projects_dir, codex_sessions_dir=sessions_dir)
+    assert len(projects) == 1
+    project = projects[0]
+    assert project.project_slug == "-Users-alice-code-alpha"
+    assert project.claude_dir == str(projects_dir / "-Users-alice-code-alpha")
+    assert project.codex_files == [str(rollout)]
+
+
+def test_list_projects_adds_codex_only_project(tmp_path):
+    projects_dir = tmp_path / "projects"
+    projects_dir.mkdir()
+    (projects_dir / "-Users-alice-code-alpha").mkdir()
+    sessions_dir = tmp_path / "codex"
+    rollout = write_rollout(sessions_dir, "r1", "/Users/alice/code/zeta")
+
+    projects = list_projects(projects_dir, codex_sessions_dir=sessions_dir)
+    assert [p.project_slug for p in projects] == [
+        "-Users-alice-code-alpha", "-Users-alice-code-zeta",
+    ]
+    codex_only = projects[1]
+    assert codex_only.claude_dir is None
+    assert codex_only.display_name == "zeta"
+    assert codex_only.codex_files == [str(rollout)]
+
+
+def test_list_projects_include_flags(tmp_path):
+    projects_dir = tmp_path / "projects"
+    projects_dir.mkdir()
+    (projects_dir / "-Users-alice-code-alpha").mkdir()
+    sessions_dir = tmp_path / "codex"
+    write_rollout(sessions_dir, "r1", "/Users/alice/code/zeta")
+
+    claude_only = list_projects(projects_dir, include_codex=False, codex_sessions_dir=sessions_dir)
+    assert [p.project_slug for p in claude_only] == ["-Users-alice-code-alpha"]
+    assert claude_only[0].codex_files == []
+
+    codex_only = list_projects(projects_dir, include_claude=False, codex_sessions_dir=sessions_dir)
+    assert [p.project_slug for p in codex_only] == ["-Users-alice-code-zeta"]
+    assert codex_only[0].claude_dir is None
+
+    neither = list_projects(projects_dir, include_claude=False, include_codex=False,
+                            codex_sessions_dir=sessions_dir)
+    assert neither == []
+
+
+# load_project
+
+def test_load_project_uses_claude_dir(tmp_path):
+    project_dir = tmp_path / "-Users-alice-code-alpha"
+    project_dir.mkdir()
+    write_jsonl(project_dir / "sess1.jsonl", [
+        {"type": "user", "message": {"role": "user", "content": "hi"}, "timestamp": "2026-01-01T00:00:00Z"},
+        {"type": "assistant", "message": {"role": "assistant", "content": "yo",
+                                          "usage": {"input_tokens": 10, "output_tokens": 5}},
+         "timestamp": "2026-01-01T00:00:01Z"},
+    ])
+    project = ProjectStats(project_slug=project_dir.name, display_name="alpha",
+                           claude_dir=str(project_dir))
+    load_project(project)
+    assert project.loaded
+    assert project.load_error is None
+    assert [s.session_id for s in project.sessions] == ["sess1"]
+
+
+def _codex_lines() -> list[dict]:
+    return [
+        {"timestamp": "2026-01-01T00:00:01Z", "type": "turn_context",
+         "payload": {"model": "gpt-5.6-sol"}},
+        {"timestamp": "2026-01-01T00:00:02Z", "type": "event_msg",
+         "payload": {"type": "user_message", "message": "hi from codex"}},
+        {"timestamp": "2026-01-01T00:00:03Z", "type": "event_msg",
+         "payload": {"type": "token_count", "info": {"total_token_usage": {
+             "input_tokens": 100, "cached_input_tokens": 40,
+             "cache_write_input_tokens": 10, "output_tokens": 20,
+             "reasoning_output_tokens": 5}}}},
+    ]
+
+
+def test_load_project_loads_both_sources(tmp_path):
+    project_dir = tmp_path / "-Users-alice-code-alpha"
+    project_dir.mkdir()
+    write_jsonl(project_dir / "sess1.jsonl", [
+        {"type": "user", "message": {"role": "user", "content": "hi"}, "timestamp": "2026-01-01T00:00:00Z"},
+        {"type": "assistant", "message": {"role": "assistant", "content": "yo",
+                                          "usage": {"input_tokens": 10, "output_tokens": 5}},
+         "timestamp": "2026-01-01T00:00:01Z"},
+    ])
+    rollout = write_rollout(tmp_path / "codex", "r1", "/Users/alice/code/alpha", _codex_lines())
+
+    project = ProjectStats(project_slug=project_dir.name, display_name="alpha",
+                           claude_dir=str(project_dir), codex_files=[str(rollout)])
+    load_project(project)
+    assert project.loaded
+    assert project.load_error is None
+    assert [s.session_id for s in project.sessions] == ["sess1", "r1"]
+    codex_session = project.sessions[1]
+    assert len(codex_session.exchanges) == 1
+    assert codex_session.exchanges[0].model == "gpt-5.6-sol"
+    assert codex_session.exchanges[0].input_tokens == 60   # 100 - 40 cached
+    assert codex_session.exchanges[0].reasoning_output_tokens == 5
+
+
+def test_load_project_codex_only(tmp_path):
+    rollout = write_rollout(tmp_path / "codex", "r1", "/Users/alice/code/zeta", _codex_lines())
+    project = ProjectStats(project_slug="-Users-alice-code-zeta", display_name="zeta",
+                           codex_files=[str(rollout)])
+    load_project(project)
+    assert project.loaded
+    assert project.load_error is None
+    assert [s.session_id for s in project.sessions] == ["r1"]
+
+
+def test_load_project_bad_codex_file_does_not_drop_claude_sessions(tmp_path):
+    project_dir = tmp_path / "-Users-alice-code-alpha"
+    project_dir.mkdir()
+    write_jsonl(project_dir / "sess1.jsonl", [
+        {"type": "user", "message": {"role": "user", "content": "hi"}, "timestamp": "2026-01-01T00:00:00Z"},
+        {"type": "assistant", "message": {"role": "assistant", "content": "yo",
+                                          "usage": {"input_tokens": 10, "output_tokens": 5}},
+         "timestamp": "2026-01-01T00:00:01Z"},
+    ])
+    project = ProjectStats(project_slug=project_dir.name, display_name="alpha",
+                           claude_dir=str(project_dir),
+                           codex_files=[str(tmp_path / "missing" / "rollout-x.jsonl")])
+    load_project(project)
+    assert project.loaded
+    assert [s.session_id for s in project.sessions] == ["sess1"]
+    assert "rollout-x.jsonl" in project.load_error
+
+
+def test_load_project_without_claude_dir_is_a_noop():
+    project = ProjectStats(project_slug="-Users-alice-code-beta", display_name="beta")
+    load_project(project)
+    assert project.loaded
+    assert project.load_error is None
+    assert project.sessions == []
 
 
 # _is_human_user_message

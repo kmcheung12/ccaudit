@@ -97,8 +97,8 @@ def test_latest_jsonl_path_returns_most_recent(tmp_path):
     os.utime(a, (1000, 1000))
     os.utime(b, (2000, 2000))
 
-    s_a = _SessionStats(session_id="aaa", display_name="aaa", first_timestamp=None, jsonl_path=str(a))
-    s_b = _SessionStats(session_id="bbb", display_name="bbb", first_timestamp=None, jsonl_path=str(b))
+    s_a = _SessionStats(session_id="aaa", display_name="aaa", jsonl_path=str(a))
+    s_b = _SessionStats(session_id="bbb", display_name="bbb", jsonl_path=str(b))
     project = _make_loaded_project([s_a, s_b])
 
     result = latest_jsonl_path([project])
@@ -110,7 +110,7 @@ def test_latest_jsonl_path_skips_unloaded():
     assert latest_jsonl_path([project]) is None
 
 def test_find_session_by_path():
-    s = _SessionStats(session_id="aaa", display_name="aaa", first_timestamp=None, jsonl_path="/tmp/aaa.jsonl")
+    s = _SessionStats(session_id="aaa", display_name="aaa", jsonl_path="/tmp/aaa.jsonl")
     project = _make_loaded_project([s])
 
     found_project, found_session = find_session_by_path([project], "/tmp/aaa.jsonl")

@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 from parser.models import ProjectStats, SessionStats, ExchangeStats, CategoryBreakdown
 from parser import categorizer
+from parser import codex_loader
 
 PROJECTS_DIR = Path.home() / ".claude" / "projects"
 
@@ -15,18 +16,42 @@ def slug_to_display(slug: str) -> str:
     return slug
 
 
-def list_projects(projects_dir: Path = PROJECTS_DIR) -> list[ProjectStats]:
-    """Return unloaded ProjectStats for each subdirectory of projects_dir."""
-    if not projects_dir.exists():
-        return []
-    projects = []
-    for d in sorted(projects_dir.iterdir()):
-        if d.is_dir():
-            projects.append(ProjectStats(
-                project_slug=d.name,
-                display_name=slug_to_display(d.name),
-            ))
-    return projects
+def list_projects(
+    projects_dir: Path = PROJECTS_DIR,
+    include_claude: bool = True,
+    include_codex: bool = True,
+    codex_sessions_dir: Path = codex_loader.CODEX_SESSIONS_DIR,
+) -> list[ProjectStats]:
+    """Return unloaded ProjectStats for every discovered project.
+
+    Claude projects come from the subdirectories of projects_dir; Codex rollouts
+    are grouped by the working directory they ran in. Both sources key off the
+    same project slug, so a directory used by both harnesses yields a single
+    ProjectStats carrying a claude_dir *and* codex_files.
+    """
+    by_slug: dict[str, ProjectStats] = {}
+
+    if include_claude and projects_dir.exists():
+        for d in sorted(projects_dir.iterdir()):
+            if d.is_dir():
+                by_slug[d.name] = ProjectStats(
+                    project_slug=d.name,
+                    display_name=slug_to_display(d.name),
+                    claude_dir=str(d),
+                )
+
+    if include_codex:
+        for slug, files in codex_loader.list_codex_sessions(codex_sessions_dir).items():
+            project = by_slug.get(slug)
+            if project is None:
+                project = ProjectStats(
+                    project_slug=slug,
+                    display_name=slug_to_display(slug),
+                )
+                by_slug[slug] = project
+            project.codex_files = [str(f) for f in files]
+
+    return [by_slug[slug] for slug in sorted(by_slug)]
 
 
 def path_to_slug(project_dir: Path) -> str:
@@ -37,17 +62,30 @@ def path_to_slug(project_dir: Path) -> str:
     return project_dir.as_posix().replace("/", "-")
 
 
-def load_project(project: ProjectStats, projects_dir: Path = PROJECTS_DIR) -> None:
-    """Load all sessions for a project in-place. Sets project.loaded = True."""
+def load_project(project: ProjectStats) -> None:
+    """Load all Claude and Codex sessions for a project in-place.
+
+    Sets project.loaded = True. A single unreadable session file is recorded in
+    load_error but does not discard the sessions that did parse.
+    """
+    errors: list[str] = []
     try:
-        base = Path(project.projects_dir) if project.projects_dir else projects_dir
-        project_dir = base / project.project_slug
-        for jsonl_file in sorted(project_dir.glob("*.jsonl")):
-            project.sessions.append(load_session(jsonl_file))
-        project.loaded = True
+        if project.claude_dir:
+            for jsonl_file in sorted(Path(project.claude_dir).glob("*.jsonl")):
+                try:
+                    project.sessions.append(load_session(jsonl_file))
+                except Exception as e:
+                    errors.append(f"{jsonl_file.name}: {e}")
+        for codex_file in project.codex_files:
+            try:
+                project.sessions.append(codex_loader.load_codex_session(Path(codex_file)))
+            except Exception as e:
+                errors.append(f"{Path(codex_file).name}: {e}")
     except Exception as e:
-        project.load_error = str(e)
-        project.loaded = True
+        errors.append(str(e))
+    if errors:
+        project.load_error = "; ".join(errors)
+    project.loaded = True
 
 
 def _extract_text(content) -> str:

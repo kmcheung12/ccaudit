@@ -21,6 +21,7 @@ class TokenTotals:
     cache_create_5m: int
     cache_create_1h: int
     output: int
+    reasoning_output: int = 0
 
 
 @dataclass
@@ -37,12 +38,13 @@ class BarRow:
 
 # Category display colours (Rich style strings)
 _CAT_STYLE = {
-    "Messages": "orange1",
-    "Skills":   "bright_yellow",
-    "Tools":    "bright_blue",
-    "MCP":      "bright_red",
-    "Agents":   "bright_cyan",
-    "Other":    "white",
+    "Messages":  "orange1",
+    "Skills":    "bright_yellow",
+    "Tools":     "bright_blue",
+    "MCP":       "bright_red",
+    "Agents":    "bright_cyan",
+    "Reasoning": "magenta",
+    "Other":     "white",
 }
 
 
@@ -80,6 +82,7 @@ def _get_totals(node) -> TokenTotals:
             cache_create_5m=node.cache_create_5m_tokens,
             cache_create_1h=node.cache_create_1h_tokens,
             output=node.output_tokens,
+            reasoning_output=node.reasoning_output_tokens,
         )
     return TokenTotals(
         input_tokens=node.total_input_tokens,
@@ -88,6 +91,7 @@ def _get_totals(node) -> TokenTotals:
         cache_create_5m=node.total_cache_create_5m_tokens,
         cache_create_1h=node.total_cache_create_1h_tokens,
         output=node.total_output_tokens,
+        reasoning_output=node.total_reasoning_output_tokens,
     )
 
 
@@ -107,6 +111,7 @@ def _collect_model_stats(node) -> dict[str, dict]:
                 "cache_create_5m": 0,
                 "cache_create_1h": 0,
                 "output": 0,
+                "reasoning_output": 0,
                 "duration": 0.0,
             }
         d = result[key]
@@ -116,6 +121,7 @@ def _collect_model_stats(node) -> dict[str, dict]:
         d["cache_create_5m"] += exchange.cache_create_5m_tokens
         d["cache_create_1h"] += exchange.cache_create_1h_tokens
         d["output"] += exchange.output_tokens
+        d["reasoning_output"] += exchange.reasoning_output_tokens
         d["duration"] += exchange.duration_seconds
 
     if isinstance(node, SessionStats):
@@ -445,6 +451,7 @@ class DetailPane(Widget):
         totals_table.add_row(f"{totals.cache_create_1h:,}",                  label="  1 hour")
         totals_table.add_row(f"{totals.cache_read:,}  ({cache_pct:.0f}% hit)", label="Cache read")
         totals_table.add_row(f"{totals.output:,}",                           label="Output")
+        totals_table.add_row(f"{totals.reasoning_output:,}",                 label="  reasoning")
         totals_table.add_row(_fmt_duration(duration),                        label="Duration")
 
     def _refresh_totals_multi(self, model_stats: dict[str, dict]) -> None:
@@ -481,6 +488,9 @@ class DetailPane(Widget):
 
         output_vals = [f"{model_stats[m]['output']:,}" for m in models]
         _row("Output", output_vals)
+
+        reasoning_vals = [f"{model_stats[m]['reasoning_output']:,}" for m in models]
+        _row("  reasoning", reasoning_vals)
 
         duration_vals = [_fmt_duration(model_stats[m]["duration"]) for m in models]
         _row("Duration", duration_vals)

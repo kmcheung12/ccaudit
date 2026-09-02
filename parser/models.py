@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Optional
 
 
-CATEGORIES = ["Skills", "Tools", "MCP", "Agents", "Messages", "Other"]
+CATEGORIES = ["Skills", "Tools", "MCP", "Agents", "Messages", "Reasoning", "Other"]
 
 
 @dataclass
@@ -20,16 +20,18 @@ class CategoryBreakdown:
     mcp_tools: list[CategoryItem] = field(default_factory=list)
     agents: list[CategoryItem] = field(default_factory=list)
     messages_tokens: int = 0
+    reasoning_tokens: int = 0
     other_tokens: int = 0
 
     def category_totals(self) -> dict[str, int]:
         return {
-            "Skills":   sum(i.tokens for i in self.skills),
-            "Tools":    sum(i.tokens for i in self.tools),
-            "MCP":      sum(i.tokens for i in self.mcp_tools),
-            "Agents":   sum(i.tokens for i in self.agents),
-            "Messages": self.messages_tokens,
-            "Other":    self.other_tokens,
+            "Skills":    sum(i.tokens for i in self.skills),
+            "Tools":     sum(i.tokens for i in self.tools),
+            "MCP":       sum(i.tokens for i in self.mcp_tools),
+            "Agents":    sum(i.tokens for i in self.agents),
+            "Messages":  self.messages_tokens,
+            "Reasoning": self.reasoning_tokens,
+            "Other":     self.other_tokens,
         }
 
     def total_attributed_tokens(self) -> int:
@@ -44,6 +46,7 @@ def _merge_breakdowns(breakdowns: list[CategoryBreakdown]) -> CategoryBreakdown:
         merged.mcp_tools.extend(bd.mcp_tools)
         merged.agents.extend(bd.agents)
         merged.messages_tokens += bd.messages_tokens
+        merged.reasoning_tokens += bd.reasoning_tokens
         merged.other_tokens += bd.other_tokens
     return merged
 
@@ -58,6 +61,7 @@ class ExchangeStats:
     output_tokens: int
     category_breakdown: CategoryBreakdown
     after_compact: bool = False
+    reasoning_output_tokens: int = 0
     cache_create_5m_tokens: int = 0
     cache_create_1h_tokens: int = 0
     user_text: str = ""
@@ -132,6 +136,10 @@ class SessionStats:
     def total_output_tokens(self) -> int:
         return sum(t.output_tokens for t in self.exchanges)
 
+    @property
+    def total_reasoning_output_tokens(self) -> int:
+        return sum(t.reasoning_output_tokens for t in self.exchanges)
+
     def category_totals(self) -> dict[str, int]:
         merged = _merge_breakdowns([t.category_breakdown for t in self.exchanges])
         return merged.category_totals()
@@ -144,7 +152,8 @@ class ProjectStats:
     sessions: list[SessionStats] = field(default_factory=list)
     loaded: bool = False
     load_error: Optional[str] = None
-    projects_dir: Optional[str] = None  # override for projects outside PROJECTS_DIR
+    claude_dir: Optional[str] = None  # ~/.claude/projects/<slug> dir, or None for Codex-only
+    codex_files: list[str] = field(default_factory=list)  # codex rollout jsonl paths
 
     @property
     def total_input_tokens(self) -> int:
@@ -169,6 +178,10 @@ class ProjectStats:
     @property
     def total_output_tokens(self) -> int:
         return sum(s.total_output_tokens for s in self.sessions)
+
+    @property
+    def total_reasoning_output_tokens(self) -> int:
+        return sum(s.total_reasoning_output_tokens for s in self.sessions)
 
     def category_totals(self) -> dict[str, int]:
         merged = _merge_breakdowns(
@@ -205,6 +218,10 @@ class GlobalStats:
     @property
     def total_output_tokens(self) -> int:
         return sum(p.total_output_tokens for p in self.projects)
+
+    @property
+    def total_reasoning_output_tokens(self) -> int:
+        return sum(p.total_reasoning_output_tokens for p in self.projects)
 
     def category_totals(self) -> dict[str, int]:
         all_breakdowns = []

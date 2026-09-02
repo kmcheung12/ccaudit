@@ -1,7 +1,10 @@
 from parser.models import (
     CategoryBreakdown, CategoryItem, ExchangeStats, SessionStats, ProjectStats, GlobalStats,
 )
-from tui.detail import build_rows, build_category_rows, TokenTotals
+from tui.detail import (
+    build_rows, build_category_rows, TokenTotals, _CAT_STYLE, _collect_model_stats,
+)
+from parser.models import CATEGORIES
 
 
 def make_breakdown(skills=0, tools=0, agents=0, messages=0):
@@ -16,13 +19,15 @@ def make_breakdown(skills=0, tools=0, agents=0, messages=0):
     return bd
 
 
-def make_exchange(input_t=1000, cache_read=9550, cache_create=500, output=100, breakdown=None):
+def make_exchange(input_t=1000, cache_read=9550, cache_create=500, output=100, breakdown=None,
+                  reasoning_output=0, model=""):
     if breakdown is None:
         breakdown = make_breakdown(messages=1000)
     return ExchangeStats(
         exchange_number=1, timestamp="2026-01-01T00:00:00Z",
         input_tokens=input_t, cache_read_tokens=cache_read,
         cache_create_tokens=cache_create, output_tokens=output,
+        reasoning_output_tokens=reasoning_output, model=model,
         category_breakdown=breakdown,
     )
 
@@ -66,7 +71,7 @@ def test_build_rows_sorted_by_tokens_descending():
 
 
 def test_build_rows_for_session():
-    session = SessionStats(session_id="abc", display_name="abc1234", first_timestamp=None)
+    session = SessionStats(session_id="abc", display_name="abc1234")
     session.exchanges.append(make_exchange(input_t=500, cache_read=9550, output=50,
                                    breakdown=make_breakdown(skills=300, messages=200)))
     session.exchanges.append(make_exchange(input_t=700, cache_read=10000, output=80,
@@ -82,7 +87,7 @@ def test_build_rows_for_session():
 def test_build_rows_for_global():
     g = GlobalStats()
     p = ProjectStats(project_slug="p1", display_name="p1")
-    s = SessionStats(session_id="s1", display_name="s1abc", first_timestamp=None)
+    s = SessionStats(session_id="s1", display_name="s1abc")
     s.exchanges.append(make_exchange(input_t=100, breakdown=make_breakdown(messages=100)))
     p.sessions = [s]
     g.projects = [p]
@@ -110,3 +115,34 @@ def test_build_category_rows_empty_category():
     exchange = make_exchange(input_t=1000, breakdown=bd)
     rows = build_category_rows(exchange, "Skills")
     assert rows == []
+
+
+def test_every_category_has_a_style():
+    for cat in CATEGORIES:
+        assert cat in _CAT_STYLE
+    assert len(set(_CAT_STYLE.values())) == len(_CAT_STYLE)  # no colour collisions
+
+
+def test_reasoning_tokens_in_totals():
+    exchange = make_exchange(output=100, reasoning_output=40)
+    _, totals = build_rows(exchange)
+    assert totals.output == 100
+    assert totals.reasoning_output == 40
+
+
+def test_reasoning_tokens_roll_up_in_totals():
+    session = SessionStats(session_id="abc", display_name="abc1234")
+    session.exchanges.append(make_exchange(output=50, reasoning_output=20))
+    session.exchanges.append(make_exchange(output=80, reasoning_output=30))
+    _, totals = build_rows(session)
+    assert totals.output == 130
+    assert totals.reasoning_output == 50
+
+
+def test_collect_model_stats_tracks_reasoning():
+    session = SessionStats(session_id="abc", display_name="abc1234")
+    session.exchanges.append(make_exchange(output=50, reasoning_output=20, model="gpt-5.6-sol"))
+    session.exchanges.append(make_exchange(output=80, reasoning_output=30, model="gpt-5.6-sol"))
+    stats = _collect_model_stats(session)
+    assert stats["gpt-5.6-sol"]["output"] == 130
+    assert stats["gpt-5.6-sol"]["reasoning_output"] == 50
