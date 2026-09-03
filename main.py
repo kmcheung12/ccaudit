@@ -9,11 +9,8 @@ from tui.app import CCAuditApp
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description="ccaudit — coding agent token usage explorer")
-    group = parser.add_mutually_exclusive_group()
-    group.add_argument("-a", "--all", action="store_true",
-                       help="Read all projects (default)")
-    group.add_argument("-d", "--dir", metavar="PATH",
-                       help="Limit to a single project directory")
+    parser.add_argument("-d", "--dir", metavar="PATH",
+                        help="Limit to a single project directory (default: all projects)")
     parser.add_argument("-s", "--source", choices=("claude", "codex", "all"), default="all",
                         help="Which harness logs to read (default: all)")
     return parser.parse_args(argv)

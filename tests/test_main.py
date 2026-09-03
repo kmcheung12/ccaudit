@@ -52,9 +52,12 @@ def test_parse_args_source(argv, expected):
     assert parse_args(argv).source == expected
 
 
-def test_parse_args_dir_and_all_are_mutually_exclusive():
+def test_parse_args_rejects_removed_all_flag():
+    """-a/--all was removed; reading every project is simply the absence of -d."""
     with pytest.raises(SystemExit):
-        parse_args(["-a", "-d", "."])
+        parse_args(["-a"])
+    with pytest.raises(SystemExit):
+        parse_args(["--all"])
 
 
 def test_parse_args_rejects_unknown_source():
@@ -139,25 +142,23 @@ def test_resolve_dir_expands_user_and_resolves_relative_paths(dirs, monkeypatch,
     assert str(target) in error
 
 
-# -a / --all is currently a no-op flag ("not --dir"); pin that down.
+# No --dir means every project, and -s still applies.
 
-def test_all_flag_is_accepted_and_sets_dir_to_none():
-    for argv in ([], ["-a"], ["--all"]):
-        assert parse_args(argv).dir is None
-    assert parse_args([]).all is False
-    assert parse_args(["-a"]).all is True
-    assert parse_args(["--all"]).all is True
-
-
-@pytest.mark.parametrize("argv", [[], ["-a"], ["--all"]])
-def test_all_flag_produces_the_same_projects_as_no_flag(dirs, argv):
-    """-a, --all and no flag are behaviourally identical today."""
-    baseline, _ = resolve_projects("all", parse_args([]).dir, **dirs)
-    args = parse_args(argv)
+def test_no_flags_reads_every_project(dirs):
+    args = parse_args([])
+    assert args.dir is None
     projects, error = resolve_projects(args.source, args.dir, **dirs)
     assert error is None
-    assert [p.project_slug for p in projects] == [p.project_slug for p in baseline]
     assert len(projects) == 3
+
+
+def test_source_still_narrows_when_no_dir_is_given(dirs):
+    """Dropping -a must not make -s a no-op on the read-everything path."""
+    args = parse_args(["-s", "codex"])
+    projects, error = resolve_projects(args.source, args.dir, **dirs)
+    assert error is None
+    assert sorted(p.project_slug for p in projects) == ["-Users-alan-code-both",
+                                                        "-Users-alan-code-codexonly"]
 
 
 # --dir path forms

@@ -55,11 +55,10 @@ python main.py
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `-a`, `--all` | Yes | Read all projects from every enabled source |
 | `-d PATH`, `--dir PATH` | — | Show only the project that corresponds to the code directory at `PATH`. Looks up the matching project by slug; does not read JSONL files from `PATH` itself. |
 | `-s`, `--source {claude,codex,all}` | `all` | Which harness logs to read |
 
-`-a` and `-d` are mutually exclusive. If neither is given, `--all` is the default. `-s` composes with both.
+With no `-d`, every project is read. `-s` applies either way.
 
 **Example — view only the current project:**
 ```bash
